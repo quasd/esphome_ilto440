@@ -163,7 +163,7 @@ id(ilto).set_clock(weekday, hour, minute, second);  // weekday: Monday = 0
 
 | Entity | Type | Notes |
 |---|---|---|
-| Sensor 1-8 temperature | sensor, °C | Numbered as on the panel. Which duct each measures depends on the unit. 15 s average |
+| Sensor 1-8 temperature | sensor, °C | Numbered as on the panel. Which duct each measures depends on the unit. The unit sends whole degrees; the 15 s average shows one decimal, which tells roughly where between two whole degrees the reading sits |
 | Heat recovery efficiency | sensor, % | |
 | Fan speed | sensor | Selected speed 1-5, 0 while the unit is off |
 | Supply fan power, Extract fan power | sensor, % | 0 when the unit is off |
