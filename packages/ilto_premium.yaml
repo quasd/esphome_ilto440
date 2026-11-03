@@ -1,0 +1,250 @@
+# SPDX-License-Identifier: 0BSD
+# Copyright (C) 2026 quasd
+#
+# ILTO / Swegon CASA ventilation unit with the Premium panel, on the RS-485 bus between the
+# unit and the panel. Reads the unit's temperatures and fan state, sets the fan speed, fireplace
+# mode and power the way the panel does, and keeps the unit's clock and weekday in step with
+# Home Assistant ("Clock sync" switch).
+#
+# Use at your own risk: unofficial and reverse-engineered, tested on one unit only, no warranty.
+# Written by Claude (Anthropic's AI assistant). See README.md: https://github.com/quasd/esphome_ilto440
+#
+# Include from a device file (see examples/):
+#
+#   packages:
+#     ilto: github://quasd/esphome_ilto440/packages/ilto_premium.yaml@main
+#
+# Every entity below is optional. Remove the ones a unit does not have in the device file:
+#
+#   ilto_premium:
+#     temperature_7: !remove
+#     co2: !remove
+#
+# Pins and bus polarity are substitutions; override them in the device file's `substitutions:`.
+# The defaults are for an ESP8266 with a 5 V MAX485 module (docs/wiring.svg):
+#   RO -> 1k -> GPIO13 (D7), 2k from GPIO13 to GND (5 V -> 3.3 V)
+#   DI <- GPIO4 (D2), DE and RE tied together <- GPIO14 (D5), high only while sending
+# Receiving uses the ESP8266's swapped hardware UART0 (RX on GPIO13), so the serial log moves to
+# UART1. UART0's own TX pin, GPIO15, must be low at boot while the module pulls DI high, so
+# sending uses a software UART on GPIO4. ilto_bus_inverted is "true" when the module's RO idles
+# low (A and B reach the module the other way round), "false" when it idles high.
+
+substitutions:
+  # Where the C++ component comes from: this repository on GitHub, or a local path such as
+  # esphome_ilto440/components when working on a local clone.
+  ilto_components: github://quasd/esphome_ilto440@main
+  ilto_rx_pin: GPIO13
+  ilto_tx_pin: GPIO4
+  ilto_flow_control_pin: GPIO14
+  ilto_bus_inverted: "true"
+
+external_components:
+  - source: ${ilto_components}
+    components: [ilto_premium]
+
+logger:
+  hardware_uart: UART1
+
+uart:
+  - id: ilto_bus_rx
+    rx_pin:
+      number: ${ilto_rx_pin}
+      inverted: ${ilto_bus_inverted}
+    baud_rate: 38400
+    rx_buffer_size: 512
+  - id: ilto_bus_tx
+    tx_pin:
+      number: ${ilto_tx_pin}
+      inverted: ${ilto_bus_inverted}
+    baud_rate: 38400
+
+# The unit sends whole degrees every ~2 s; a value on the edge flips back and forth, so each
+# temperature is averaged over 15 s.
+.ilto_temperature: &ilto_temperature
+  accuracy_decimals: 1
+  filters:
+    - throttle_average: 15s
+
+# Values that repeat every ~2 s; delta passes only changes on to Home Assistant (a change equal
+# to the delta is dropped, so 0.5 for whole numbers).
+.ilto_changes_only: &ilto_changes_only
+  filters:
+    - delta: 0.5
+
+ilto_premium:
+  id: ilto
+  uart_id: ilto_bus_rx
+  tx_uart_id: ilto_bus_tx
+  flow_control_pin: ${ilto_flow_control_pin}
+  # Sensors 1-8 as the panel's service menu numbers them; which duct each one measures depends
+  # on the unit.
+  temperature_1:
+    name: "Sensor 1 temperature"
+    <<: *ilto_temperature
+  temperature_2:
+    name: "Sensor 2 temperature"
+    <<: *ilto_temperature
+  temperature_3:
+    name: "Sensor 3 temperature"
+    <<: *ilto_temperature
+  temperature_4:
+    name: "Sensor 4 temperature"
+    <<: *ilto_temperature
+  temperature_5:
+    name: "Sensor 5 temperature"
+    <<: *ilto_temperature
+  temperature_6:
+    name: "Sensor 6 temperature"
+    <<: *ilto_temperature
+  temperature_7:
+    name: "Sensor 7 temperature"
+    <<: *ilto_temperature
+  temperature_8:
+    name: "Sensor 8 temperature"
+    <<: *ilto_temperature
+  efficiency:
+    name: "Heat recovery efficiency"
+    filters:
+      - throttle_average: 60s
+  co2:
+    name: "CO2"
+    <<: *ilto_changes_only
+  humidity:
+    name: "Humidity"
+    <<: *ilto_changes_only
+  supply_fan_rpm:
+    name: "Supply fan rpm"
+    <<: *ilto_changes_only
+  extract_fan_rpm:
+    name: "Extract fan rpm"
+    <<: *ilto_changes_only
+  fan_speed:
+    id: ilto_fan_speed
+    name: "Fan speed"
+    <<: *ilto_changes_only
+  supply_fan_power:
+    name: "Supply fan power"
+    <<: *ilto_changes_only
+  extract_fan_power:
+    name: "Extract fan power"
+    <<: *ilto_changes_only
+  # Shown in Home Assistant through the switches below.
+  fireplace:
+    id: ilto_fireplace
+    internal: true
+  running:
+    id: ilto_running
+    internal: true
+  # Status bits as openHAB's swegonventilation binding reads them; not checked on an ILTO yet.
+  # Heat recovery bypassed (summer bypass damper open).
+  bypass:
+    name: "Heat recovery bypass"
+  boost:
+    name: "External boost"
+  defrosting:
+    name: "Defrosting"
+  freeze_protection:
+    name: "Freeze protection"
+  filter_alarm:
+    name: "Filter alarm"
+  service_reminder:
+    name: "Service reminder"
+  fan_failure:
+    name: "Fan failure"
+  emergency_stop:
+    name: "Emergency stop"
+
+number:
+  - platform: template
+    id: ilto_fan_speed_setting
+    name: "Fan speed setting"
+    icon: mdi:fan
+    min_value: 1
+    max_value: 5
+    step: 1
+    update_interval: 2s
+    lambda: return id(ilto_fan_speed).state;
+    set_action:
+      - lambda: id(ilto).set_fan_speed(x);
+
+switch:
+  # These two show the unit's own state. restore_mode DISABLED keeps them from running their
+  # turn_off_action at boot (the default restores "off", which switched the unit off on every
+  # ESP restart).
+  - platform: template
+    id: ilto_power
+    name: "Ventilation"
+    icon: mdi:hvac
+    restore_mode: DISABLED
+    lambda: return id(ilto_running).state;
+    turn_on_action:
+      - lambda: id(ilto).set_power(true);
+    turn_off_action:
+      - lambda: id(ilto).set_power(false);
+  - platform: template
+    id: ilto_fireplace_mode
+    name: "Fireplace mode"
+    icon: mdi:fireplace
+    restore_mode: DISABLED
+    lambda: return id(ilto_fireplace).state;
+    turn_on_action:
+      - lambda: id(ilto).set_fireplace(true);
+    turn_off_action:
+      - lambda: id(ilto).set_fireplace(false);
+  # While on, the unit's clock is set from Home Assistant's local time after each boot, every
+  # night just after the daylight saving changes (03:00 / 04:00) and when switched on. On an
+  # ESP8266 the state is kept in RTC memory (no flash wear) and comes back on after a power cut.
+  - platform: template
+    id: ilto_clock_sync
+    name: "Clock sync"
+    icon: mdi:clock-check-outline
+    entity_category: config
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_ON
+    on_turn_on:
+      - script.execute: ilto_set_clock
+
+button:
+  - platform: template
+    name: "Sync clock now"
+    icon: mdi:clock-edit-outline
+    entity_category: config
+    on_press:
+      - script.execute: ilto_set_clock
+
+# The unit's clock drives its weekly timer.
+time:
+  - platform: homeassistant
+    id: ilto_time
+    on_time_sync:
+      - if:
+          condition:
+            lambda: return !id(ilto_clock_set) && id(ilto_clock_sync).state;
+          then:
+            - script.execute: ilto_set_clock
+            - lambda: id(ilto_clock_set) = true;
+    on_time:
+      - seconds: 0
+        minutes: 5
+        hours: 4
+        then:
+          - if:
+              condition:
+                switch.is_on: ilto_clock_sync
+              then:
+                - script.execute: ilto_set_clock
+
+globals:
+  - id: ilto_clock_set
+    type: bool
+    initial_value: "false"
+
+script:
+  - id: ilto_set_clock
+    then:
+      - lambda: |-
+          auto now = id(ilto_time).now();
+          if (!now.is_valid())
+            return;
+          // ESPTime counts Sunday = 1; the unit counts Monday = 0.
+          id(ilto).set_clock((now.day_of_week + 5) % 7, now.hour, now.minute, now.second);

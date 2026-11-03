@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 680" width="960" height="680" font-family="Helvetica, Arial, sans-serif" font-size="14">
+  <title>Wiring: ILTO Premium panel bus to MAX485 to ESP8266</title>
+  <rect width="960" height="680" fill="#ffffff"/>
+  <text x="480" y="36" text-anchor="middle" font-size="20" font-weight="bold" fill="#111">ILTO Premium panel bus → MAX485 (5 V) → ESP8266 NodeMCU</text>
+
+  <!-- Panel socket -->
+  <rect x="30" y="120" width="240" height="200" rx="8" fill="#f4f6f8" stroke="#555" stroke-width="1.5"/>
+  <text x="150" y="142" text-anchor="middle" font-weight="bold" fill="#111">Panel: spare 4P4C socket</text>
+  <text x="150" y="158" text-anchor="middle" font-size="12" fill="#555">RJ10, not RJ11 - colours of the</text>
+  <text x="150" y="172" text-anchor="middle" font-size="12" fill="#555">tested cable; measure yours</text>
+  <g font-size="13" fill="#111">
+    <circle cx="260" cy="190" r="5" fill="#222"/><text x="44" y="195">Black: +5 V from the unit</text>
+    <circle cx="260" cy="230" r="5" fill="#d32f2f"/><text x="44" y="235">Red: bus, ~3.2 V idle</text>
+    <circle cx="260" cy="270" r="5" fill="#2e7d32"/><text x="44" y="275">Green: bus, ~1.5 V idle</text>
+    <circle cx="260" cy="310" r="5" fill="#c79a00"/><text x="44" y="315">Yellow: GND</text>
+  </g>
+
+  <!-- MAX485 module: VCC B A GND on one side, DI DE RE RO on the other -->
+  <rect x="400" y="150" width="180" height="230" rx="8" fill="#e8f0fb" stroke="#2f5d9e" stroke-width="1.5"/>
+  <text x="490" y="140" text-anchor="middle" font-weight="bold" fill="#111">MAX485 module</text>
+  <g font-size="13" fill="#111">
+    <text x="412" y="195">VCC</text>
+    <text x="412" y="235">B</text>
+    <text x="412" y="275">A</text>
+    <text x="412" y="315">GND</text>
+    <text x="568" y="235" text-anchor="end">DI</text>
+    <text x="568" y="275" text-anchor="end">DE</text>
+    <text x="568" y="315" text-anchor="end">RE</text>
+    <text x="568" y="355" text-anchor="end">RO</text>
+  </g>
+
+  <!-- NodeMCU -->
+  <rect x="750" y="150" width="180" height="270" rx="8" fill="#eef7ee" stroke="#2e7d32" stroke-width="1.5"/>
+  <text x="840" y="140" text-anchor="middle" font-weight="bold" fill="#111">ESP8266 NodeMCU</text>
+  <g font-size="13" fill="#111">
+    <text x="762" y="195">VU (USB 5 V)</text>
+    <text x="762" y="235">D2 / GPIO4</text>
+    <text x="762" y="295">D5 / GPIO14</text>
+    <text x="762" y="355">D7 / GPIO13</text>
+    <text x="762" y="405">GND</text>
+  </g>
+
+  <!-- Panel to module -->
+  <line x1="265" y1="190" x2="315" y2="190" stroke="#222" stroke-width="3"/>
+  <text x="321" y="186" font-size="12" fill="#555">not</text>
+  <text x="321" y="200" font-size="12" fill="#555">used</text>
+  <line x1="265" y1="230" x2="400" y2="230" stroke="#d32f2f" stroke-width="3"/>
+  <line x1="265" y1="270" x2="400" y2="270" stroke="#2e7d32" stroke-width="3"/>
+  <line x1="265" y1="310" x2="400" y2="310" stroke="#c79a00" stroke-width="3"/>
+
+  <!-- VCC: module (left side) over the top to VU -->
+  <polyline points="400,190 370,190 370,100 720,100 720,190 750,190" fill="none" stroke="#c62828" stroke-width="3"/>
+  <text x="545" y="94" text-anchor="middle" font-size="12" fill="#c62828">5 V</text>
+
+  <!-- GND: panel yellow + module GND, under the module to ESP GND -->
+  <circle cx="370" cy="310" r="4.5" fill="#222"/>
+  <polyline points="370,310 370,440 720,440 720,400 750,400" fill="none" stroke="#222" stroke-width="3"/>
+  <text x="545" y="458" text-anchor="middle" font-size="12" fill="#222">GND (panel, module and ESP joined)</text>
+
+  <!-- DI -->
+  <line x1="580" y1="230" x2="750" y2="230" stroke="#1565c0" stroke-width="3"/>
+  <!-- DE + RE joined, to D5 -->
+  <line x1="580" y1="270" x2="620" y2="270" stroke="#6a1b9a" stroke-width="3"/>
+  <line x1="580" y1="310" x2="620" y2="310" stroke="#6a1b9a" stroke-width="3"/>
+  <line x1="620" y1="270" x2="620" y2="310" stroke="#6a1b9a" stroke-width="3"/>
+  <circle cx="620" cy="290" r="4.5" fill="#6a1b9a"/>
+  <line x1="620" y1="290" x2="750" y2="290" stroke="#6a1b9a" stroke-width="3"/>
+  <!-- RO through 1k to D7, 2k from D7 to GND -->
+  <line x1="580" y1="350" x2="606" y2="350" stroke="#1565c0" stroke-width="3"/>
+  <rect x="606" y="340" width="44" height="20" fill="#fff" stroke="#111" stroke-width="1.5"/>
+  <text x="628" y="355" text-anchor="middle" font-size="12" fill="#111">1 kΩ</text>
+  <line x1="650" y1="350" x2="750" y2="350" stroke="#1565c0" stroke-width="3"/>
+  <circle cx="690" cy="350" r="4.5" fill="#1565c0"/>
+  <line x1="690" y1="350" x2="690" y2="380" stroke="#1565c0" stroke-width="3"/>
+  <rect x="680" y="380" width="20" height="36" fill="#fff" stroke="#111" stroke-width="1.5"/>
+  <text x="652" y="403" font-size="12" fill="#111" text-anchor="end">2 kΩ</text>
+  <line x1="690" y1="416" x2="690" y2="440" stroke="#222" stroke-width="3"/>
+  <circle cx="690" cy="440" r="4.5" fill="#222"/>
+
+  <!-- Notes -->
+  <g font-size="13" fill="#222">
+    <text x="30" y="500" font-weight="bold">Notes</text>
+    <text x="30" y="524">1. Power the module from the ESP's USB 5 V (the NodeMCU's VU pin). VIN on a USB-powered NodeMCU is not 5 V.</text>
+    <text x="30" y="548">2. As drawn (red on B, green on A) the module's RO idles low: keep ilto_bus_inverted: "true" (the default).</text>
+    <text x="48" y="566">With red on A and green on B, RO idles high: set ilto_bus_inverted: "false". Either works.</text>
+    <text x="30" y="590">3. Measure your own cable first: the outer pins carry ~5 V and GND, the middle pair idles ~1.7 V apart.</text>
+    <text x="30" y="614">4. Don't use D8 (GPIO15) for DI - the module pulls it high and the board will not boot. D4 (GPIO2) works but lights the LED.</text>
+    <text x="30" y="638">5. 1 kΩ / 2 kΩ divide RO's 5 V to ~3.3 V for the ESP. DI and DE/RE are driven at 3.3 V, which the MAX485 accepts.</text>
+    <text x="30" y="666" font-size="12" fill="#666">Use at your own risk. Tested on one ILTO 440 econo with a 2008 Premium panel.</text>
+  </g>
+</svg>

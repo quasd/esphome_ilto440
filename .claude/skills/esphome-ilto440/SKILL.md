@@ -1,0 +1,106 @@
+---
+name: esphome-ilto440
+description: Working on esphome_ilto440, the ESPHome component and package that read and control ILTO / Swegon CASA ventilation units through the Premium panel's RS-485 bus - the ilto_premium C++ component, packages/ilto_premium.yaml, the examples, the protocol notes and the wiring. Use it whenever a task changes, reviews, tests or documents anything in this repository, decodes a new bus message, or helps someone install or debug the bridge.
+---
+
+# esphome_ilto440
+
+An ESP8266 with a MAX485 module sits on the RS-485 bus between an ILTO / Swegon CASA ventilation
+unit and its Premium panel, reads everything the panel polls, and sends the panel's own commands.
+It was reverse-engineered on one unit (ILTO 440 econo, Premium panel from 2008); the protocol
+was written down from captures, not from documentation.
+
+## Layout
+
+| Path | What |
+|---|---|
+| `components/ilto_premium/ilto_premium.h` | The whole component (header-only): framing, CRC, decoding, the send queue. Its header comment is the protocol reference kept next to the code |
+| `components/ilto_premium/__init__.py` | Schema: every sensor optional; `flow_control_pin`, `tx_uart_id` |
+| `packages/ilto_premium.yaml` | What users include: uart, every entity, the switches, clock sync, pins as substitutions, `ilto_components` (component source) |
+| `examples/*.yaml` | Minimal (the tested unit) and custom pins (DI and DE/RE on other GPIOs) |
+| `docs/protocol.md`, `docs/wiring.svg` | Protocol and wiring for humans |
+
+Keep `docs/protocol.md`, the header comment and the README's entity table in step when the
+protocol knowledge or the entities change.
+
+## Protocol essentials
+
+- 38400 8N1. Panel = 4A, unit = 8A. The panel polls types 0x71 (temperatures) and 0x73 (status)
+  about once a second; otherwise the bus is silent until a setting is confirmed on the panel.
+- Wire format: `<n> CC 64 a b c d e LEN type data... crc_hi crc_lo`. `<n>` = bytes from CC to the
+  end of the CRC, sent before each frame. Header `4A 00 FD 00 FD` from the panel,
+  `8A 00 00 00 00` from the unit. LEN = bytes from type to the end of the data.
+- CRC16-CCITT, poly 0x1021, init 0xFFFF, over `64` .. last data byte, big-endian. Check any
+  hand-built frame against a captured one: speed 3 is
+  `14 CC 64 4A 00 FD 00 FD 0A 20 00 0C 01 00 01 3C 01 01 00 33 85`.
+- Commands: type 0x20 (speed `0C`, off `10`, on `20`, 3-step mode `05`), 0x30 fireplace, 0x54
+  clock (Monday = 0). The third data byte selects which fields the unit takes. The unit acks with
+  a LEN-3 frame echoing type and that byte. Details and the unknowns: `docs/protocol.md`.
+- Undecoded: types 0x32 / 0x36 (service-menu settings) and several 0x73 bytes. The openHAB-derived
+  status bits are unconfirmed on an ILTO - say so, don't present them as verified.
+- **Service and installation settings are left out on purpose** (owner's decision): weekly timer,
+  filter guard, summer cooling, heating, actuators, fan speed per mode and the rest of the
+  installer menus. A wrong value can stop a unit from working, so they stay on the panel. Don't
+  add them as entities; the list and the reason are in `docs/protocol.md` ("Settings not decoded,
+  on purpose").
+
+## Rules (each learned from a real failure)
+
+- **Command switches keep `restore_mode: DISABLED`.** ESPHome's default restore runs
+  `turn_off_action` at boot: the Ventilation switch switched the unit off on every ESP restart.
+  Any new entity whose action sends a command needs the same.
+- **`delta` filters on whole-number values use 0.5.** `delta: 1` drops changes of exactly 1, so
+  the fan speed sensor stuck.
+- **The component publishes every reading (~2 s); rate-limiting belongs in the package's
+  filters**, so `throttle_average` sees every sample.
+- `set_fan_speed()` resends the panel's last-seen `20 00 0C` frame with only the speed byte
+  changed - the other fields differ between captures and their meaning is unknown. Don't
+  replace them with constants.
+- Package list items are not merged by id: to change an item from the package use
+  `- id: !extend <id>`; to drop a key use `!remove`.
+- Pins: RX must be GPIO13 (swapped hardware UART0). TX is a software UART because GPIO15 must be
+  low at boot and the module pulls DI high; GPIO2 lights the LED. The logger goes to UART1.
+  ESPHome's ESP8266 `uart.load_settings()` restarts Serial without `swap()` - call
+  `Serial.swap()` after it if the baud is ever changed at runtime.
+- The ESP8266 allows 4 API connections. Log sessions left running (e.g. a killed client whose
+  `esphome logs` process lives on in a container) lock Home Assistant out.
+
+## Debugging the bridge
+
+The component logs `bytes N, frames ok M, bad crc K, last bytes: ...` every 10 s.
+
+- `bytes 0`: no signal. First check the MAX485 has 5 V (VIN on a USB-powered NodeMCU does not),
+  GND is shared, and A/B are on the middle pair (~1.7 V apart at idle). An unpowered module only
+  passes ~6 µs spikes from the fan relays, which are easy to mistake for fast data.
+- `bytes` growing, `frames ok 0`: polarity - flip `ilto_bus_inverted`.
+- "No acknowledgement ... giving up": DE/RE or DI not wired, or the bus was busy three times.
+
+## Decoding a new message
+
+1. Run a DEBUG log session (one only) and save the whole log.
+2. Have the person change exactly one thing on the panel, wait ~10 s, change it back.
+3. The component logs `new type XX: CC ...` / `changed type XX: ...` for every frame whose content
+   is new for its header and type; compare the two frames and the following 0x73 status.
+4. The person cannot type while at the panel: start the capture before they walk over and give
+   them generous time.
+5. Add the command to the header comment, `docs/protocol.md`, a component method, and only then
+   an entity.
+
+## Testing a change
+
+- Compile every example against the working tree before committing. The examples load the
+  package from GitHub, so in a temporary copy replace their `github://.../packages/ilto_premium.yaml@...`
+  package reference with `!include esphome_ilto440/packages/ilto_premium.yaml`, set the substitution
+  `ilto_components: esphome_ilto440/components`, add dummy `wifi_ssid`, `wifi_password`,
+  `api_encryption_key` and `ota_password` secrets, and run `esphome compile` on each.
+- On hardware: after flashing, confirm the unit is still running (Ventilation on, fan power
+  unchanged), then test a command with a short round trip (speed +1 and back) and look for
+  "Unit acknowledged" in the log. Leave the unit as it was.
+
+## Writing style for this repo
+
+User-facing text is English (the panel and manuals are Finnish; translate: Kotona = Home,
+Poissa = Away, Tehostus = Boost, Takka = Fireplace, Anturi = sensor). Keep the "use at your own
+risk / written by Claude" disclaimer in the README, the package and the component header.
+The project is 0BSD (`LICENSE`); new source files start with the same SPDX and copyright lines
+as the existing ones.

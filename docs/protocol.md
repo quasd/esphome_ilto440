@@ -1,0 +1,164 @@
+# ILTO / Swegon CASA Premium panel bus
+
+What is known about the bus between an ILTO (Swegon CASA) ventilation unit and its Premium
+control panel, reverse-engineered on an ILTO 440 econo with a Premium panel from 2008 by sniffing
+the bus while changing settings on the panel. Other units and panel versions may differ.
+
+Starting points were openHAB 1's `swegonventilation` binding (`swegongw.c`,
+`SwegonVentilationDataParser.java`), which only reads the bus, and the unit's installation
+manuals. Where this document says "openHAB", the meaning comes from there and has not been
+confirmed on an ILTO.
+
+## Physical layer
+
+- Modular 4P4C (RJ10) cable between the panel and the unit; the panel has a second socket for
+  chaining. Outer pins: about 5 V and GND from the unit. Middle pair: RS-485.
+- Idle, the pair is driven about 1.7 V apart (3.2 V and 1.5 V to GND on the tested cable).
+- **38400 baud, 8 data bits, no parity, 1 stop bit.** One bit is 26 µs.
+- Half duplex. The panel is the only master.
+
+## Traffic pattern
+
+- The panel (address **4A**) polls the unit (address **8A**) for two messages, temperatures (type
+  0x71) and status (0x73), about once a second, alternating; a request/answer pair every ~2 s.
+- Nothing else is sent until a setting is confirmed on the panel. The panel then sends one
+  command frame and the unit acknowledges it.
+- There is about a second of silence between polls, which is where a third device can send.
+
+## Frame format
+
+```
+<n> CC 64 a b c d e LEN type data... crc_hi crc_lo
+```
+
+| Field | Meaning |
+|---|---|
+| `<n>` | Length of the frame that follows, counted from `CC` to the end of the CRC. Sent before every frame |
+| `CC` | Start of frame |
+| `64` | Always 0x64 (first byte of the CRC'd part) |
+| `a b c d e` | Header. From the panel: `4A 00 FD 00 FD`; from the unit: `8A 00 00 00 00` |
+| `LEN` | Number of bytes from `type` to the end of the data |
+| `type` | Message type |
+| `crc` | CRC16-CCITT: polynomial 0x1021, initial value 0xFFFF, no reflection, over `64` .. the last data byte, sent high byte first |
+
+The header is two bytes longer than openHAB's documented `CC 64 D S CMD LEN`.
+
+Polls:
+
+```
+0D  CC 64 4A 00 FD 00 FD 03 71 00 FF 06 F0                       panel asks for 0x71
+1A  CC 64 8A 00 00 00 00 10 71 00 FF <13 data bytes> crc crc      unit answers
+0D  CC 64 4A 00 FD 00 FD 03 73 00 FF 68 90                       panel asks for 0x73
+22  CC 64 8A 00 00 00 00 18 73 00 FF <21 data bytes> crc crc      unit answers
+```
+
+In the answers, the payload starts after `type 00 FF`; `p[0]` below is the first byte after
+`FF`.
+
+### Building a frame (Python)
+
+```python
+def crc16(data):
+    crc = 0xFFFF
+    for b in data:
+        crc ^= b << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) if crc & 0x8000 else crc << 1
+            crc &= 0xFFFF
+    return crc
+
+def command(data):  # data = type onwards
+    body = bytes([0x64, 0x4A, 0x00, 0xFD, 0x00, 0xFD, len(data)]) + bytes(data)
+    c = crc16(body)
+    frame = b"\xCC" + body + bytes([c >> 8, c & 0xFF])
+    return bytes([len(frame)]) + frame
+
+command([0x20, 0x00, 0x0C, 0x01, 0x00, 0x01, 0x3C, 0x01, 0x01, 0x00])
+# 14 CC 64 4A 00 FD 00 FD 0A 20 00 0C 01 00 01 3C 01 01 00 33 85  (speed 3, as the panel sends it)
+```
+
+## Commands (panel → unit)
+
+The unit acknowledges each command with `CC 64 8A 00 00 00 00 03 <type> 00 <select> crc`, where
+`<select>` echoes the command's third byte. In type 0x20 and 0x54 commands that byte selects
+which of the following fields the unit takes; the panel fills the others with current values.
+
+| Data (from `type`) | Meaning |
+|---|---|
+| `20 00 0C 01 00 01 <s> 01 01 00` | Fan speed. `<s>` = speed × 20 %: 14, 28, 3C, 50, 64 for speeds 1-5 |
+| `20 00 10 <same fields>` | Switch the unit off (fans stop) |
+| `20 00 20 <same fields>` | Switch it on again; it resumes the speed it had (the speed byte is ignored) |
+| `20 00 05 <m> 00 00 3C 00 00 00` | Sent instead of the speed command when the panel's basic display is the 3-step Away / Home / Boost layout: `<m>` 00 Away, 01 Home, 02 Boost. The unit maps each step to one of the 5 speeds (on the tested unit: 20 %, 60 %, 100 %) |
+| `30 00 10 00 00 00 00 02` / `... 01` | Fireplace mode on / off (supply 100 %, extract 20 % for ~10 min) |
+| `54 00 0E <wd> <h> <min> <s>` | Set the clock. `<wd>` weekday with **Monday = 0**, then hour, minute, second |
+| `54 00 01 <wd> <h> <min> <s>` | Set the weekday (the panel sends this after the time command) |
+| `32 01 02 0A 02 00 00 00 01 01 00` | Seen when a service-menu setting was saved. Not decoded |
+| `36 01 01 02 3C 02 02 0F 32 00 01`, `36 01 02 ...` | Seen when service-menu functions were changed; 0x3C = 60 matched the filter guard's 60 min delay. Not decoded |
+
+The fields after `20 00 0C` changed between captures (`01 00 01 <s> 01 01 00` and
+`01 00 01 <s> 00 00 00`); the component therefore resends the panel's last-seen speed command
+with only the speed byte changed.
+
+## Temperatures and efficiency (0x71, 13 bytes)
+
+Checked against the panel's service screens on the tested unit.
+
+| Byte | Meaning |
+|---|---|
+| p[0]..p[7] | Panel's temperature sensors 1-8, signed °C. openHAB names p0-p3 outdoor, supply, extract, supply after reheater and p7 exhaust, but on the tested unit sensor 1 read 26 °C in November, so the mapping depends on the unit. Unconnected sensors read 111 |
+| p[8] | CO2 (openHAB; 0 on the tested unit, scale unchecked) |
+| p[9] | Relative humidity (openHAB; 0 on the tested unit) |
+| p[10], p[11] | Supply / extract fan rpm ÷ 10 (openHAB; the econo shows 0 rpm, p[10] occasionally read 1-22) |
+| p[12] | Heat recovery efficiency, % |
+
+## Status (0x73, 21 bytes)
+
+| Byte | Meaning |
+|---|---|
+| p[0] | 0x40 constant on the tested unit. openHAB: 0x01 heating, 0x02 cooling, 0x04 bypass, 0x08 freeze protection, 0x10 preheating, 0x20 chilling, 0x40 preheater overheat, 0x80 reheating |
+| p[1] | 0x01 fireplace mode (confirmed). openHAB: 0x02 underpressure compensation, 0x04 external boost, 0x08 humidity boost, 0x10 CO2 boost, 0x20 defrosting |
+| p[2] | 0x04 while the fans run, 0x00 when stopped |
+| p[3] | openHAB: 0x04 external boost function, 0x08 external fireplace, 0x10 filter guard, 0x20 IR freeze protection, 0x80 emergency stop |
+| p[4] | 0x01 normally, 0x21 with the 3-step display, 0x00 for about a minute after fireplace mode or off/on |
+| p[7] | openHAB: alarms - 0x08 supply fan failure, 0x10 extract fan failure, ... |
+| p[8] | 0x00 / 0x40 / 0xC0, changes around off/on (unknown). openHAB: 0x02 filter guard alarm, 0x04 service reminder |
+| p[9], p[14], p[15], p[18] | Follow the display layout and the current Away / Home / Boost step |
+| p[12], p[13] | Supply / extract fan power, % |
+| p[16] | 0x10 constant |
+| p[17] | Selected speed × 20 % |
+| p[19] | 1 while the unit is switched off |
+| p[20] | 0x07 running; 0x03 then 0x04 while switching off |
+
+openHAB also documents a type 0x21 (operating mode, unit state, fan speed); the tested unit never
+sent it.
+
+## Settings not decoded, on purpose
+
+Only day-to-day controls are decoded and exposed: fan speed, on/off, fireplace mode and the
+clock. The panel's other settings were never captured on the bus, and this project deliberately
+leaves them out. Most of them describe the unit's installation - which accessories, actuators
+and heaters are fitted - and set wrong for the hardware they can stop the unit from working
+properly (for example enabling a heater, a damper motor or a sensor that is not there). They
+belong on the panel, set once by the installer or owner, not on a dashboard where they can be
+changed by accident.
+
+Not decoded, from the panel's menus (names translated from Finnish):
+
+| Menu | Settings |
+|---|---|
+| Main menu | Weekly timer, temperature (supply air setpoint), after-heating (electric models), summer cooling (start temperature, fan speed while cooling), basic display layout, fireplace function, shutdown |
+| Installation and service: functions | Filter guard (on/off, alarm delay), fireplace function (on/off, duration, whether it overrides another function), boost (on/off, duration), underpressure compensation, service reminder (interval), summer cooling (on/off, temperature difference, outdoor limit) |
+| Installation and service: devices | Duct devices 1 and 2, recirculation air, heat recovery actuator (bypass damper, run time), valve motor, heating (setpoint, overheat limit, supply or room control) |
+| Installation and service: other | Fan speed for each mode (which of the 5 speeds Away / Home / Boost use), frost protection method, CO2 / humidity / presence inputs, factory reset |
+
+Saving some of these sent the type 0x32 and 0x36 frames in the command table, but one example
+of each is not enough to tell which byte is which setting, and sending a wrong guess could
+change several settings at once. The unit's state while these features run (bypass, defrosting,
+alarms) is still read from the 0x73 status message where its bits are known.
+
+## Learning more
+
+The component logs every frame whose content is new for its header and type at DEBUG level
+(`new type 36: CC 64 ...` / `changed type 73: ...`). To decode something new: start a log
+session, change exactly one thing on the panel, wait 10 s, change it back, and compare the
+frames. A capture of each service-menu setting would decode types 0x32 and 0x36.

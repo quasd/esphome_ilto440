@@ -1,0 +1,40 @@
+# Minimal device file: everything comes from the package on GitHub.
+# This is the configuration running on the tested ILTO 440 econo; it removes the entities that
+# unit does not have. Copy it, change the name, and keep or remove entities for your unit.
+
+substitutions:
+  name: ilto-440
+  friendly_name: ILTO 440
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp8266:
+  board: nodemcuv2
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+logger:
+
+packages:
+  ilto: github://quasd/esphome_ilto440/packages/ilto_premium.yaml@main
+
+# The econo reports no fan rpm, has no CO2 or humidity sensor, and nothing is connected to
+# sensor 7 (it reads 111 C). Check your panel's sensor screens before removing anything.
+ilto_premium:
+  temperature_7: !remove
+  co2: !remove
+  humidity: !remove
+  supply_fan_rpm: !remove
+  extract_fan_rpm: !remove
