@@ -185,12 +185,12 @@ polls, sends the panel's own command frame, and resends until the unit acknowled
 tries). Frame format, every known command and status byte, and what is still unknown:
 [docs/protocol.md](docs/protocol.md).
 
-Two design points worth knowing if you change the YAML:
+Two design points worth knowing:
 - The Ventilation and Fireplace mode switches only mirror the unit's state and keep
   `restore_mode: DISABLED`. With ESPHome's default restore, a switch runs its turn-off action at
   boot - which switched the unit off on every restart of the ESP.
-- Every fan speed set sends a command, even to the same value. Trigger automations on events,
-  not on a timer.
+- Setting the fan speed it already has sends nothing (the unit's status shows the current speed),
+  so automations can set it as often as they like.
 
 ## Troubleshooting
 

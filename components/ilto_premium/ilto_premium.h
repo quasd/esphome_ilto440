@@ -116,10 +116,16 @@ class IltoPremium : public Component, public uart::UARTDevice {
   }
 
   // Speed 1-5, sent as the panel's last speed command with only the speed byte changed, so the
-  // fields not decoded yet keep the panel's values.
+  // fields not decoded yet keep the panel's values. Nothing is sent when the unit already reports
+  // that speed and no other speed command is waiting, so automations can set it freely.
   void set_fan_speed(int speed) {
+    speed = clamp(speed, 1, 5);
+    if (speed == this->reported_speed_ && !this->speed_command_waiting_()) {
+      ESP_LOGD(TAG, "Fan speed is already %d, nothing sent", speed);
+      return;
+    }
     std::vector<uint8_t> data = this->speed_command_;
-    data[6] = clamp(speed, 1, 5) * 20;
+    data[6] = speed * 20;
     this->queue_(std::move(data));
   }
 
@@ -212,6 +218,20 @@ class IltoPremium : public Component, public uart::UARTDevice {
   uint8_t attempts_{0};
   uint32_t sent_at_{0};
   uint32_t last_rx_{0};
+  // The selected speed from the last 0x73 status, 0 while unknown: before the first status, and
+  // with the panel's 3-step (Away / Home / Boost) layout, where p[17] is not what the fans run at.
+  int reported_speed_{0};
+
+  bool speed_command_waiting_() const {
+    auto is_speed = [](const std::vector<uint8_t> &c) { return c.size() > 2 && c[0] == 0x20 && c[2] == 0x0C; };
+    if (is_speed(this->pending_))
+      return true;
+    for (const auto &c : this->commands_) {
+      if (is_speed(c))
+        return true;
+    }
+    return false;
+  }
 
   void queue_(std::vector<uint8_t> data) {
     if (this->flow_control_pin_ == nullptr) {
@@ -321,6 +341,10 @@ class IltoPremium : public Component, public uart::UARTDevice {
       this->pending_.clear();
       this->awaiting_ack_ = false;
     }
+    // A speed / power / mode command (the panel's or ours) changes the speed before the next status
+    // shows it, so treat the speed as unknown until then.
+    if (type == 0x20)
+      this->reported_speed_ = 0;
     if (this->buf_[1] == 0x4A && type == 0x20 && this->buf_[9] == 0x0C && n + 3 == this->speed_command_.size())
       this->speed_command_.assign(this->buf_ + 7, this->buf_ + 7 + n + 3);
 
@@ -357,6 +381,7 @@ class IltoPremium : public Component, public uart::UARTDevice {
           publish_(this->extract_fan_power_sensor_, p[13]);
           publish_(this->fan_speed_sensor_, p[17] / 20);
           publish_(this->running_binary_sensor_, p[19] == 0);
+          this->reported_speed_ = (p[4] & 0x20) ? 0 : p[17] / 20;
         }
         if (n >= 9) {
           publish_(this->bypass_binary_sensor_, p[0] & 0x04);

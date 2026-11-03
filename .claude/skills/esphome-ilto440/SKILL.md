@@ -53,6 +53,9 @@ protocol knowledge or the entities change.
   the fan speed sensor stuck.
 - **The component publishes every reading (~2 s); rate-limiting belongs in the package's
   filters**, so `throttle_average` sees every sample.
+- `set_fan_speed()` sends nothing when the last 0x73 status already shows that speed and no speed
+  command is waiting. Any type 0x20 frame (panel command or ack) and the 3-step layout make the
+  speed unknown until the next status, so a change made in between is never skipped.
 - `set_fan_speed()` resends the panel's last-seen `20 00 0C` frame with only the speed byte
   changed - the other fields differ between captures and their meaning is unknown. Don't
   replace them with constants.
