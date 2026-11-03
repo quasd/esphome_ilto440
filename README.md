@@ -23,6 +23,10 @@ working.
 - **Keeps the unit's clock and weekday in sync** with Home Assistant (its weekly timer depends on
   them), after every boot and every night, so power cuts and daylight saving changes don't matter.
 
+The device in Home Assistant (on the tested ILTO 440 econo, with the entities it lacks removed):
+
+![The device page in Home Assistant](docs/home-assistant.png)
+
 Everything is an ESPHome package: include one line, remove what your unit does not have.
 
 **Not included, on purpose:** the panel's service and installation settings (weekly timer,
