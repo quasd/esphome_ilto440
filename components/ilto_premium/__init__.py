@@ -4,9 +4,10 @@
 import esphome.codegen as cg
 from esphome import pins
 import esphome.config_validation as cv
-from esphome.components import binary_sensor, sensor, uart
+from esphome.components import binary_sensor, select, sensor, switch, uart
 from esphome.const import (
     CONF_ID,
+    CONF_RESTORE_MODE,
     DEVICE_CLASS_CARBON_DIOXIDE,
     DEVICE_CLASS_HUMIDITY,
     DEVICE_CLASS_PROBLEM,
@@ -20,10 +21,31 @@ from esphome.const import (
 )
 
 DEPENDENCIES = ["uart"]
-AUTO_LOAD = ["sensor", "binary_sensor"]
+AUTO_LOAD = ["sensor", "binary_sensor", "select", "switch"]
 
 ilto_premium_ns = cg.esphome_ns.namespace("ilto_premium")
 IltoPremium = ilto_premium_ns.class_("IltoPremium", cg.Component, uart.UARTDevice)
+IltoSwitch = ilto_premium_ns.class_("IltoSwitch", switch.Switch, cg.Parented.template(IltoPremium))
+IltoSwitchKind = IltoSwitch.enum("Kind")
+IltoModeSelect = ilto_premium_ns.class_(
+    "IltoModeSelect", select.Select, cg.Parented.template(IltoPremium)
+)
+# The order is the C++ side's mode numbers: Off = 0, speeds 1-5, Fireplace = 6.
+MODE_OPTIONS = ["Off", "1", "2", "3", "4", "5", "Fireplace"]
+
+
+def _no_restore(config):
+    # A restored "off" would switch the unit off on every ESP restart.
+    if str(config[CONF_RESTORE_MODE]) != "DISABLED":
+        raise cv.Invalid("restore_mode must stay DISABLED: the switch mirrors the unit's own state")
+    return config
+
+
+# The unit's power and fireplace mode, sending the panel's commands.
+SWITCHES = {
+    "ventilation": ("POWER", "mdi:hvac"),
+    "fireplace_mode": ("FIREPLACE", "mdi:fireplace"),
+}
 
 # The panel's sensor 1..8 screens, in that order. openHAB calls the first ones
 # outdoor/supply/extract, but on an ILTO 440 econo sensor 1 reads 26 C in winter, so which
@@ -66,6 +88,12 @@ SCHEMA = {
         accuracy_decimals=0, state_class=STATE_CLASS_MEASUREMENT, icon="mdi:fan"
     ),
 }
+# One control for off / speed 1-5 / fireplace.
+SCHEMA[cv.Optional("mode")] = select.select_schema(IltoModeSelect, icon="mdi:fan")
+for key, (_, icon) in SWITCHES.items():
+    SCHEMA[cv.Optional(key)] = cv.All(
+        switch.switch_schema(IltoSwitch, icon=icon, default_restore_mode="DISABLED"), _no_restore
+    )
 for key in TEMPERATURES:
     SCHEMA[cv.Optional(key)] = sensor.sensor_schema(
         unit_of_measurement=UNIT_CELSIUS,
@@ -124,6 +152,16 @@ async def to_code(config):
         if key in config:
             sens = await sensor.new_sensor(config[key])
             cg.add(getattr(var, f"set_{key}_sensor")(sens))
+    if "mode" in config:
+        sel = await select.new_select(config["mode"], options=MODE_OPTIONS)
+        await cg.register_parented(sel, var)
+        cg.add(var.set_mode_select(sel))
+    for key, (kind, _) in SWITCHES.items():
+        if key in config:
+            sw = await switch.new_switch(config[key])
+            await cg.register_parented(sw, var)
+            cg.add(sw.set_kind(IltoSwitchKind.enum(kind)))
+            cg.add(getattr(var, f"set_{key}_switch")(sw))
     for key in [*STATES, *PROBLEMS]:
         if key in config:
             sens = await binary_sensor.new_binary_sensor(config[key])

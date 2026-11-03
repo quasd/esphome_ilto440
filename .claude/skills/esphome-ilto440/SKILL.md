@@ -46,13 +46,20 @@ protocol knowledge or the entities change.
 
 ## Rules (each learned from a real failure)
 
-- **Command switches keep `restore_mode: DISABLED`.** ESPHome's default restore runs
-  `turn_off_action` at boot: the Ventilation switch switched the unit off on every ESP restart.
-  Any new entity whose action sends a command needs the same.
+- **Nothing may send a command at boot.** The Ventilation select (`IltoModeSelect`: Off, 1-5,
+  Fireplace; the package uses only this) and the optional `ventilation` / `fireplace_mode`
+  switches (`IltoSwitch`) are the component's own entities: no setup, so nothing runs at boot,
+  and the switch schema rejects any restore_mode but DISABLED. As template switches with ESPHome's default restore they ran
+  `turn_off_action` at boot and switched the unit off on every ESP restart. Any new entity that
+  sends a command must be built the same way.
 - **`delta` filters on whole-number values use 0.5.** `delta: 1` drops changes of exactly 1, so
   the fan speed sensor stuck.
 - **The component publishes every reading (~2 s); rate-limiting belongs in the package's
   filters**, so `throttle_average` sees every sample.
+- `set_mode()` sends only the needed steps: "on" before a speed or fireplace if the unit is off,
+  "fireplace off" before a speed (whether a speed command alone ends fireplace mode was never
+  tested). `running_` / `fireplace_` take the target when a command is queued and a status does
+  not overwrite them while such a command waits, so quick successive choices build on each other.
 - `set_fan_speed()` sends nothing when the last 0x73 status already shows that speed and no speed
   command is waiting. Any type 0x20 frame (panel command or ack) and the 3-step layout make the
   speed unknown until the next status, so a change made in between is never skipped.

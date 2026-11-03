@@ -9,6 +9,8 @@
 
 #include "esphome/components/binary_sensor/binary_sensor.h"
 #include "esphome/components/sensor/sensor.h"
+#include "esphome/components/select/select.h"
+#include "esphome/components/switch/switch.h"
 #include "esphome/components/uart/uart.h"
 #include "esphome/core/component.h"
 #include "esphome/core/helpers.h"
@@ -70,7 +72,30 @@
 
 namespace esphome::ilto_premium {
 
+class IltoPremium;
+
+// The unit's power and fireplace mode as switches. They show the state the unit reports and send
+// a command only when switched. They are not Components and have no setup, so nothing is sent at
+// boot (the schema also only allows restore_mode DISABLED): a restored "off" switched the unit off
+// on every ESP restart when these were template switches.
+class IltoSwitch : public switch_::Switch, public Parented<IltoPremium> {
+ public:
+  enum Kind : uint8_t { POWER, FIREPLACE };
+  void set_kind(Kind kind) { this->kind_ = kind; }
+
+ protected:
+  void write_state(bool state) override;
+  Kind kind_{POWER};
+};
+
 static const char *const TAG = "ilto_premium";
+
+// One control for the unit: options Off, 1-5 (fan speed) and Fireplace, in that order. Shows the
+// state the unit reports; like the switches it has no setup, so nothing is sent at boot.
+class IltoModeSelect : public select::Select, public Parented<IltoPremium> {
+ protected:
+  void control(size_t index) override;
+};
 
 class IltoPremium : public Component, public uart::UARTDevice {
  public:
@@ -93,6 +118,39 @@ class IltoPremium : public Component, public uart::UARTDevice {
   SUB_SENSOR(operating_mode)
   SUB_SENSOR(unit_state)
   SUB_BINARY_SENSOR(fireplace)
+  void set_ventilation_switch(IltoSwitch *s) { this->ventilation_switch_ = s; }
+  void set_fireplace_mode_switch(IltoSwitch *s) { this->fireplace_mode_switch_ = s; }
+  void set_mode_select(IltoModeSelect *s) { this->mode_select_ = s; }
+
+  static constexpr size_t MODE_OFF = 0;  // 1-5 are the fan speeds
+  static constexpr size_t MODE_FIREPLACE = 6;
+
+  // Brings the unit to Off, speed 1-5 or Fireplace with the fewest commands: switches it on first
+  // if needed, and ends fireplace mode before a speed is set (whether a speed command alone ends
+  // it was never tested). Steps the unit is already in are skipped.
+  void set_mode(size_t mode) {
+    // running_ / fireplace_ take the target as soon as a command is queued, so a second choice made
+    // before the unit's next status builds on the first.
+    if (mode == MODE_OFF) {
+      if (this->running_ != 0)
+        this->set_power(false);
+      this->running_ = 0;
+      return;
+    }
+    if (this->running_ != 1)
+      this->set_power(true);
+    this->running_ = 1;
+    if (mode == MODE_FIREPLACE) {
+      if (this->fireplace_ != 1)
+        this->set_fireplace(true);
+      this->fireplace_ = 1;
+      return;
+    }
+    if (this->fireplace_ != 0)
+      this->set_fireplace(false);
+    this->fireplace_ = 0;
+    this->set_fan_speed(mode);
+  }
   SUB_BINARY_SENSOR(running)
   SUB_BINARY_SENSOR(bypass)
   SUB_BINARY_SENSOR(boost)
@@ -218,20 +276,31 @@ class IltoPremium : public Component, public uart::UARTDevice {
   uint8_t attempts_{0};
   uint32_t sent_at_{0};
   uint32_t last_rx_{0};
+  IltoSwitch *ventilation_switch_{nullptr};
+  IltoModeSelect *mode_select_{nullptr};
+  size_t published_mode_{SIZE_MAX};
+  // From the last 0x73 status: 1 / 0, or -1 before the first one.
+  int8_t running_{-1};
+  int8_t fireplace_{-1};
+  IltoSwitch *fireplace_mode_switch_{nullptr};
   // The selected speed from the last 0x73 status, 0 while unknown: before the first status, and
   // with the panel's 3-step (Away / Home / Boost) layout, where p[17] is not what the fans run at.
   int reported_speed_{0};
 
-  bool speed_command_waiting_() const {
-    auto is_speed = [](const std::vector<uint8_t> &c) { return c.size() > 2 && c[0] == 0x20 && c[2] == 0x0C; };
-    if (is_speed(this->pending_))
+  // Is a command of this type (and select byte, unless -1) queued or waiting for its ack?
+  bool command_waiting_(uint8_t type, int select = -1) const {
+    auto matches = [&](const std::vector<uint8_t> &c) {
+      return c.size() > 2 && c[0] == type && (select < 0 || c[2] == select);
+    };
+    if (matches(this->pending_))
       return true;
     for (const auto &c : this->commands_) {
-      if (is_speed(c))
+      if (matches(c))
         return true;
     }
     return false;
   }
+  bool speed_command_waiting_() const { return this->command_waiting_(0x20, 0x0C); }
 
   void queue_(std::vector<uint8_t> data) {
     if (this->flow_control_pin_ == nullptr) {
@@ -379,14 +448,31 @@ class IltoPremium : public Component, public uart::UARTDevice {
         if (n >= 20) {
           publish_(this->supply_fan_power_sensor_, p[12]);
           publish_(this->extract_fan_power_sensor_, p[13]);
-          publish_(this->fan_speed_sensor_, p[17] / 20);
+          // The selected speed while running, 0 while switched off.
+          publish_(this->fan_speed_sensor_, p[19] ? 0 : p[17] / 20);
           publish_(this->running_binary_sensor_, p[19] == 0);
+          if (this->ventilation_switch_ != nullptr)
+            this->ventilation_switch_->publish_state(p[19] == 0);
           this->reported_speed_ = (p[4] & 0x20) ? 0 : p[17] / 20;
+          // Keep the expected state while a power / fireplace command is still waiting to be sent.
+          if (!this->command_waiting_(0x20, 0x10) && !this->command_waiting_(0x20, 0x20))
+            this->running_ = p[19] == 0;
+          if (!this->command_waiting_(0x30))
+            this->fireplace_ = p[1] & 0x01;
+          const size_t mode = p[19]            ? MODE_OFF
+                              : (p[1] & 0x01) ? MODE_FIREPLACE
+                                              : size_t(clamp(p[17] / 20, 1, 5));
+          if (this->mode_select_ != nullptr && mode != this->published_mode_) {
+            this->published_mode_ = mode;
+            this->mode_select_->publish_state(mode);
+          }
         }
         if (n >= 9) {
           publish_(this->bypass_binary_sensor_, p[0] & 0x04);
           publish_(this->freeze_protection_binary_sensor_, p[0] & 0x08);
           publish_(this->fireplace_binary_sensor_, p[1] & 0x01);
+          if (this->fireplace_mode_switch_ != nullptr)
+            this->fireplace_mode_switch_->publish_state(p[1] & 0x01);
           publish_(this->boost_binary_sensor_, p[1] & 0x04);
           publish_(this->defrosting_binary_sensor_, p[1] & 0x20);
           publish_(this->emergency_stop_binary_sensor_, p[3] & 0x80);
@@ -409,5 +495,16 @@ class IltoPremium : public Component, public uart::UARTDevice {
       s->publish_state(value);
   }
 };
+
+// The select and switches keep their old state until the unit's next status shows the change
+// (about 2 s).
+inline void IltoModeSelect::control(size_t index) { this->parent_->set_mode(index); }
+
+inline void IltoSwitch::write_state(bool state) {
+  if (this->kind_ == POWER)
+    this->parent_->set_power(state);
+  else
+    this->parent_->set_fireplace(state);
+}
 
 }  // namespace esphome::ilto_premium

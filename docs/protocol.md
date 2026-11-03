@@ -119,7 +119,7 @@ Checked against the panel's service screens on the tested unit.
 | p[1] | 0x01 fireplace mode (confirmed). openHAB: 0x02 underpressure compensation, 0x04 external boost, 0x08 humidity boost, 0x10 CO2 boost, 0x20 defrosting |
 | p[2] | 0x04 while the fans run, 0x00 when stopped |
 | p[3] | openHAB: 0x04 external boost function, 0x08 external fireplace, 0x10 filter guard, 0x20 IR freeze protection, 0x80 emergency stop |
-| p[4] | 0x01 normally, 0x21 with the 3-step display, 0x00 for about a minute after fireplace mode or off/on |
+| p[4] | 0x01 normally, 0x21 with the 3-step display, 0x00 for about a minute after fireplace mode or off/on. During that start-up phase the unit stores a new speed at once (p[17]) but the fans keep the start speed until it ends (seen: ~40 s) |
 | p[7] | openHAB: alarms - 0x08 supply fan failure, 0x10 extract fan failure, ... |
 | p[8] | 0x00 / 0x40 / 0xC0, changes around off/on (unknown). openHAB: 0x02 filter guard alarm, 0x04 service reminder |
 | p[9], p[14], p[15], p[18] | Follow the display layout and the current Away / Home / Boost step |

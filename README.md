@@ -152,6 +152,7 @@ ilto_premium:
 From your own ESPHome lambdas the component offers:
 
 ```cpp
+id(ilto).set_mode(3);             // 0 = off, 1-5 = speed, 6 = fireplace (as the Ventilation control)
 id(ilto).set_fan_speed(3);        // 1-5
 id(ilto).set_power(false);        // switch the unit off / on
 id(ilto).set_fireplace(true);     // fireplace mode on / off
@@ -164,13 +165,11 @@ id(ilto).set_clock(weekday, hour, minute, second);  // weekday: Monday = 0
 |---|---|---|
 | Sensor 1-8 temperature | sensor, °C | Numbered as on the panel. Which duct each measures depends on the unit. 15 s average |
 | Heat recovery efficiency | sensor, % | |
-| Fan speed | sensor | Selected speed 1-5 |
+| Fan speed | sensor | Selected speed 1-5, 0 while the unit is off |
 | Supply fan power, Extract fan power | sensor, % | 0 when the unit is off |
 | CO2, Humidity | sensor | Only with those options; scale unchecked |
 | Supply fan rpm, Extract fan rpm | sensor | Not reported by econo models |
-| Fan speed setting | number 1-5 | Sets the speed |
-| Ventilation | switch | Unit on / off |
-| Fireplace mode | switch | Supply 100 %, extract 20 % for ~10 min, to start a fire |
+| Ventilation | select | Off, 1-5 or Fireplace: the unit's state, and how to change it. Right after switching on, the unit keeps its start speed for about a minute before a new speed takes effect (Supply / Extract fan power show when). Fireplace runs supply 100 %, extract 20 % for ~10 min to start a fire, then the unit returns to its speed |
 | Clock sync | switch (config) | On by default: set the unit's clock after boot and at 04:05 daily |
 | Sync clock now | button (config) | |
 | Heat recovery bypass, External boost, Defrosting, Freeze protection, Filter alarm, Service reminder, Fan failure, Emergency stop | binary sensor | Bit positions from the openHAB binding, not yet seen changing on an ILTO |
@@ -186,11 +185,11 @@ tries). Frame format, every known command and status byte, and what is still unk
 [docs/protocol.md](docs/protocol.md).
 
 Two design points worth knowing:
-- The Ventilation and Fireplace mode switches only mirror the unit's state and keep
-  `restore_mode: DISABLED`. With ESPHome's default restore, a switch runs its turn-off action at
-  boot - which switched the unit off on every restart of the ESP.
-- Setting the fan speed it already has sends nothing (the unit's status shows the current speed),
-  so automations can set it as often as they like.
+- The Ventilation control shows the unit's own state and never acts at boot, so
+  restarting or updating the ESP never switches the unit off.
+- Choosing the state the unit is already in sends nothing, and changing it sends only the steps
+  needed (switch on first, end fireplace mode first), so automations can set it as often as they
+  like.
 
 ## Troubleshooting
 

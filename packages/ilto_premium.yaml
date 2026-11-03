@@ -128,13 +128,10 @@ ilto_premium:
   extract_fan_power:
     name: "Extract fan power"
     <<: *ilto_changes_only
-  # Shown in Home Assistant through the switches below.
-  fireplace:
-    id: ilto_fireplace
-    internal: true
-  running:
-    id: ilto_running
-    internal: true
+  # One control for the unit: Off, fan speed 1-5 or Fireplace. Shows the unit's state and sends
+  # the panel's commands. (The component also offers `ventilation` and `fireplace_mode` switches.)
+  mode:
+    name: "Ventilation"
   # Status bits as openHAB's swegonventilation binding reads them; not checked on an ILTO yet.
   # Heat recovery bypassed (summer bypass damper open).
   bypass:
@@ -154,43 +151,7 @@ ilto_premium:
   emergency_stop:
     name: "Emergency stop"
 
-number:
-  - platform: template
-    id: ilto_fan_speed_setting
-    name: "Fan speed setting"
-    icon: mdi:fan
-    min_value: 1
-    max_value: 5
-    step: 1
-    update_interval: 2s
-    lambda: return id(ilto_fan_speed).state;
-    set_action:
-      - lambda: id(ilto).set_fan_speed(x);
-
 switch:
-  # These two show the unit's own state. restore_mode DISABLED keeps them from running their
-  # turn_off_action at boot (the default restores "off", which switched the unit off on every
-  # ESP restart).
-  - platform: template
-    id: ilto_power
-    name: "Ventilation"
-    icon: mdi:hvac
-    restore_mode: DISABLED
-    lambda: return id(ilto_running).state;
-    turn_on_action:
-      - lambda: id(ilto).set_power(true);
-    turn_off_action:
-      - lambda: id(ilto).set_power(false);
-  - platform: template
-    id: ilto_fireplace_mode
-    name: "Fireplace mode"
-    icon: mdi:fireplace
-    restore_mode: DISABLED
-    lambda: return id(ilto_fireplace).state;
-    turn_on_action:
-      - lambda: id(ilto).set_fireplace(true);
-    turn_off_action:
-      - lambda: id(ilto).set_fireplace(false);
   # While on, the unit's clock is set from Home Assistant's local time after each boot, every
   # night just after the daylight saving changes (03:00 / 04:00) and when switched on. On an
   # ESP8266 the state is kept in RTC memory (no flash wear) and comes back on after a power cut.
