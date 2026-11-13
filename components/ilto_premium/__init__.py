@@ -4,7 +4,7 @@
 import esphome.codegen as cg
 from esphome import pins
 import esphome.config_validation as cv
-from esphome.components import binary_sensor, select, sensor, switch, uart
+from esphome.components import binary_sensor, select, sensor, switch, text_sensor, uart
 from esphome.const import (
     CONF_ID,
     CONF_RESTORE_MODE,
@@ -15,13 +15,14 @@ from esphome.const import (
     ENTITY_CATEGORY_DIAGNOSTIC,
     STATE_CLASS_MEASUREMENT,
     UNIT_CELSIUS,
+    UNIT_MINUTE,
     UNIT_PARTS_PER_MILLION,
     UNIT_PERCENT,
     UNIT_REVOLUTIONS_PER_MINUTE,
 )
 
 DEPENDENCIES = ["uart"]
-AUTO_LOAD = ["sensor", "binary_sensor", "select", "switch"]
+AUTO_LOAD = ["sensor", "binary_sensor", "select", "switch", "text_sensor"]
 
 ilto_premium_ns = cg.esphome_ns.namespace("ilto_premium")
 IltoPremium = ilto_premium_ns.class_("IltoPremium", cg.Component, uart.UARTDevice)
@@ -32,6 +33,11 @@ IltoModeSelect = ilto_premium_ns.class_(
 )
 # The order is the C++ side's mode numbers: Off = 0, speeds 1-5, Fireplace = 6.
 MODE_OPTIONS = ["Off", "1", "2", "3", "4", "5", "Fireplace"]
+IltoStepSelect = ilto_premium_ns.class_(
+    "IltoStepSelect", select.Select, cg.Parented.template(IltoPremium)
+)
+# The panel's 3-step choices on the CASA bus layout, in the C++ side's order (STEP_CODE / STEP_MINUTES).
+STEP_OPTIONS = ["Away", "Home", "Boost 30 min", "Boost 60 min", "Boost 120 min", "Boost"]
 
 
 def _no_restore(config):
@@ -55,7 +61,7 @@ FAN_RPMS = ["supply_fan_rpm", "extract_fan_rpm"]
 FAN_POWERS = ["supply_fan_power", "extract_fan_power"]
 # Raw codes whose meaning is not documented yet; kept as diagnostics to learn them.
 RAW_CODES = ["operating_mode", "unit_state"]
-STATES = ["fireplace", "running", "bypass", "boost", "defrosting", "freeze_protection"]
+STATES = ["fireplace", "running", "bypass", "boost", "defrosting", "freeze_protection", "after_heating", "after_heating_enabled"]
 PROBLEMS = ["filter_alarm", "service_reminder", "fan_failure", "emergency_stop"]
 
 SCHEMA = {
@@ -90,6 +96,23 @@ SCHEMA = {
 }
 # One control for off / speed 1-5 / fireplace.
 SCHEMA[cv.Optional("mode")] = select.select_schema(IltoModeSelect, icon="mdi:fan")
+# Away / Home / Boost, as the panel's 3-step screen (CASA bus layout only).
+SCHEMA[cv.Optional("step_mode")] = select.select_schema(IltoStepSelect, icon="mdi:home-switch")
+# The unit's own clock, "Fri 19:23" (CASA bus layout).
+SCHEMA[cv.Optional("unit_clock")] = text_sensor.text_sensor_schema(
+    icon="mdi:clock-outline", entity_category=ENTITY_CATEGORY_DIAGNOSTIC
+)
+# The panel's basic display from 0x73 p[15], "Basic display 1" / "Basic display 2" (CASA bus layout).
+SCHEMA[cv.Optional("basic_display")] = text_sensor.text_sensor_schema(
+    icon="mdi:monitor-dashboard", entity_category=ENTITY_CATEGORY_DIAGNOSTIC
+)
+# Minutes left of a timed boost (CASA bus layout), counted by the ESP from the boost's start; 0 otherwise.
+SCHEMA[cv.Optional("boost_time")] = sensor.sensor_schema(
+    unit_of_measurement=UNIT_MINUTE,
+    accuracy_decimals=0,
+    state_class=STATE_CLASS_MEASUREMENT,
+    icon="mdi:timer-outline",
+)
 for key, (_, icon) in SWITCHES.items():
     SCHEMA[cv.Optional(key)] = cv.All(
         switch.switch_schema(IltoSwitch, icon=icon, default_restore_mode="DISABLED"), _no_restore
@@ -148,7 +171,7 @@ async def to_code(config):
         tx_uart = await cg.get_variable(config["tx_uart_id"])
         cg.add(var.set_tx_uart(tx_uart))
 
-    for key in ["efficiency", "co2", "humidity", "fan_speed", *TEMPERATURES, *FAN_RPMS, *FAN_POWERS, *RAW_CODES]:
+    for key in ["efficiency", "co2", "humidity", "fan_speed", "boost_time", *TEMPERATURES, *FAN_RPMS, *FAN_POWERS, *RAW_CODES]:
         if key in config:
             sens = await sensor.new_sensor(config[key])
             cg.add(getattr(var, f"set_{key}_sensor")(sens))
@@ -156,6 +179,16 @@ async def to_code(config):
         sel = await select.new_select(config["mode"], options=MODE_OPTIONS)
         await cg.register_parented(sel, var)
         cg.add(var.set_mode_select(sel))
+    if "basic_display" in config:
+        ts = await text_sensor.new_text_sensor(config["basic_display"])
+        cg.add(var.set_basic_display_text_sensor(ts))
+    if "unit_clock" in config:
+        ts = await text_sensor.new_text_sensor(config["unit_clock"])
+        cg.add(var.set_unit_clock_text_sensor(ts))
+    if "step_mode" in config:
+        sel = await select.new_select(config["step_mode"], options=STEP_OPTIONS)
+        await cg.register_parented(sel, var)
+        cg.add(var.set_step_select(sel))
     for key, (kind, _) in SWITCHES.items():
         if key in config:
             sw = await switch.new_switch(config[key])

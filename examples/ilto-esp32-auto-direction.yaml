@@ -1,0 +1,101 @@
+# ESP32 (30-pin "NodeMCU ESP-WROOM-32" board) with a 3.3 V RS-485 module that switches between
+# sending and receiving by itself - the MAX3485 boards with only VCC, GND, TXD and RXD on the
+# logic side. Reading tested on an ILTO 440 Premium (CASA bus layout, see the README).
+#
+# Wiring:
+#   ESP32 3V3      -> module VCC
+#   ESP32 GND      -> module GND -> the cable's GND
+#   ESP32 TX2 (GPIO17), RX2 (GPIO16) -> the module's TXD / RXD. The labels on these modules differ:
+#                     if the log shows "bytes 0", swap the two wires.
+#   module A       -> the cable's middle wire that reads ~3.2 V to GND
+#   module B       -> the middle wire that reads ~1.5 V
+#   The cable's ~5 V wire stays unconnected. Leave the module's 120 ohm terminator (R16) open.
+#
+# Such a module drives the bus only while its TX input is low, so the bus must not be inverted:
+# ilto_bus_inverted stays "false", and polarity is fixed by connecting A and B the right way
+# round (swap the wires rather than the setting).
+#
+# The tested unit uses the CASA bus layout (see the README), where the panel's 3-step control
+# (Away / Home / Boost), off / on, fireplace mode and the clock are known; speeds 1-5 only with the
+# panel's 5-step screen. So this file adds the Ventilation mode select, on/off and fireplace switches
+# and the unit's clock, and drops the package's speed select and fan speed sensor. On an ILTO-layout
+# unit, leave those out.
+
+substitutions:
+  name: ilto-440
+  friendly_name: ILTO 440
+
+  ilto_rx_pin: GPIO16
+  ilto_tx_pin: GPIO17
+  # Not wired: the module switches direction itself, but the component expects a pin.
+  ilto_flow_control_pin: GPIO4
+  ilto_bus_inverted: "false"
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+# The package moves the log to UART1 for the ESP8266; the ESP32 has UARTs to spare, so keep it on
+# UART0 (USB).
+logger:
+  hardware_uart: UART0
+
+packages:
+  ilto: github://quasd/esphome_ilto440/packages/ilto_premium.yaml@main
+
+ilto_premium:
+  # CASA layout: Away / Home / Boost, and the minutes left of a timed boost.
+  step_mode:
+    name: "Ventilation mode"
+  boost_time:
+    name: "Boost time left"
+    filters:
+      - delta: 0.5
+  # The unit on / off.
+  ventilation:
+    name: "Ventilation"
+  # Fireplace mode (the panel's Takkatoiminto); the unit ends it by itself after its set time.
+  fireplace_mode:
+    name: "Fireplace"
+  # The unit's own clock (kept in step by the package's Clock sync).
+  unit_clock:
+    name: "Unit clock"
+  # Which screen the panel shows: decides whether step_mode or the speed select works.
+  basic_display:
+    name: "Basic display"
+  # The electric after-heater heating (the panel's LED blinks orange), and the panel's setting for it.
+  after_heating:
+    name: "After-heating"
+    icon: mdi:radiator
+  after_heating_enabled:
+    name: "After-heating enabled"
+    icon: mdi:radiator-disabled
+    entity_category: diagnostic
+  # Speed 1-5 (the package's Ventilation select and Fan speed) works on the CASA layout only with the
+  # panel's 5-step screen (basic display 2). This unit uses the 3-step screen, so they are removed;
+  # with the 5-step screen keep them and remove step_mode instead.
+  mode: !remove
+  fan_speed: !remove
+  # Sensors this unit does not have (the panel shows 0, or 110-111 for a temperature):
+  temperature_7: !remove
+  co2: !remove
+  humidity: !remove
+  supply_fan_rpm: !remove
+  extract_fan_rpm: !remove

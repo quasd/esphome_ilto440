@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cmath>
 #include <deque>
 #include <map>
 #include <vector>
@@ -11,12 +12,13 @@
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/select/select.h"
 #include "esphome/components/switch/switch.h"
+#include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/uart/uart.h"
 #include "esphome/core/component.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
 
-// Use at your own risk: unofficial and reverse-engineered, tested on one unit only, no warranty.
+// Use at your own risk: unofficial and reverse-engineered, tested on two units only, no warranty.
 // Written by Claude (Anthropic's AI assistant). See the repository README.md.
 //
 // Driver for the bus between an ILTO / Swegon CASA Premium ventilation unit and its control
@@ -56,6 +58,8 @@
 //   p[4]         0x01 normally, 0x21 with the 3-step screen, 0x00 for about a minute after
 //                fireplace mode or an off/on
 //   p[8]         0x00 / 0x40 / 0xC0, changes around off/on (meaning unknown)
+//   CASA p[0]    0x80 electric after-heating in use (cleared when it is switched off on the panel, and while
+//                the unit is off), 0x01 with it: the heater is heating (the panel's LED blinks orange)
 //   p[9], p[14], p[15], p[18]  follow the panel's screen type and the current 3-step mode
 //   p[12], p[13] supply / extract fan power, %
 //   p[17]        selected speed x 20 %
@@ -69,6 +73,44 @@
 // With a flow_control_pin (the transceiver's DE and RE) set, this sends the same commands as the
 // panel, in a pause between polls, and resends until the unit acknowledges. Every frame whose
 // content is new for its header and type is logged at DEBUG.
+//
+// A second bus layout ("CASA", short header) was captured on another ILTO / CASA Premium unit.
+// Same CC 64 start, same CRC and the same 0x71 / 0x73 payloads, but a 3-byte header
+// <flags> <destination> <source>, no length byte before CC, and the unit is the bus master:
+//
+//   CC | 64 | flags dst src | len | type | ?? A0 | payload (len - 3 bytes) | crc_hi | crc_lo
+//
+//   CC 64 85 FD 0A 13 71 00 A0 <16 bytes> crc crc   unit (0A) to all (FD): temperatures
+//   CC 64 85 FD 0A 18 73 00 A0 <21 bytes> crc crc   unit to all: status
+//   CC 64 85 FD 0A <len> <type> <00|01> A0 ...       one of ~35 other types, a different one each round
+//   CC 64 45 FD 0A 05 AA 00 00 02 0A crc crc         unit to all (meaning unknown)
+//   CC 64 45 01 0A 03 A0 00 00 crc crc               unit polls the panel (01)
+//   CC 64 85 0A 01 04 A0 00 00 00 crc crc            panel answers with nothing to report
+//
+// The round repeats about every 0.6 s. The panel, with its 3-step screen, sends its command in
+// place of the empty answer to the poll, and the unit acks it straight away:
+//
+//   CC 64 45 0A 01 0B 20 00 81 <step> 00 00 28 00 00 00 <min> crc crc   panel to unit
+//   CC 64 85 01 0A 06 20 00 81 01 <step> <fan %> crc crc                   unit acks
+//
+//   step 00 Away (fans 20 %), 01 Home (40 %), 02 Boost (60 %); min 1E / 3C / 78 = 30 / 60 / 120 min,
+//   00 = no time limit. Stepping through the panel's list sends every step it passes.
+//
+// The status (0x73) then carries the choice in p[14] (00 / 01 / 02), the boost minutes in p[5],
+// and p[19] = 0x20 during a timed boost. The component sends the same command, as the panel (01),
+// in the pause after the panel's empty answer. Off and on are the same 11 bytes with 10 / 20 in place
+// of 81 (acked 20 00 10 01 / 20 00 20 01). With the panel's 5-step screen (basic display 2) the
+// speed command is 20 00 08 01 00 01 <speed x 20 %> 00 00 00 00 (acked 20 00 08 01 01 <%>), and 0x73
+// p[15] = 01; the screen itself is switched with 20 00 04 01 00 <00 3-step | 01 5-step> 28 00 00 00 00
+// (acked 20 00 04 01). That command is known but deliberately not sent: the screen is the panel's
+// choice, shown read-only by the basic_display text sensor.
+// The clock commands are the ILTO's (54 00 0E / 54 00 01 <weekday, Monday = 0> <h> <min> <s>, acked
+// 54 00 0E 01 / 54 00 01 01), and type 0x55 carries the unit's clock: <weekday> <h> <min> <s>. So is
+// the fireplace command: 30 00 10 00 00 00 00 <02 start | 01 stop>, acked 30 00 10 01. During fireplace
+// mode 0x73 p[1] = 01 (00 otherwise), p[4] = 00 and the fans run supply 60 % / extract 20 % (from Home on
+// the tested unit); the panel shows "Takkatoiminto 10 min" and the unit ends it by itself. Fireplace is
+// not sent while the unit is off (never captured). Both layouts are tried on
+// every frame and the CRC picks the one that fits; the first good frame fixes the layout for sending.
 
 namespace esphome::ilto_premium {
 
@@ -97,6 +139,13 @@ class IltoModeSelect : public select::Select, public Parented<IltoPremium> {
   void control(size_t index) override;
 };
 
+// The panel's 3-step control on the CASA layout: Away, Home, Boost 30 / 60 / 120 min, Boost (no time
+// limit), in that order. Built like IltoModeSelect: no setup, nothing sent at boot.
+class IltoStepSelect : public select::Select, public Parented<IltoPremium> {
+ protected:
+  void control(size_t index) override;
+};
+
 class IltoPremium : public Component, public uart::UARTDevice {
  public:
   SUB_SENSOR(temperature_1)
@@ -121,9 +170,39 @@ class IltoPremium : public Component, public uart::UARTDevice {
   void set_ventilation_switch(IltoSwitch *s) { this->ventilation_switch_ = s; }
   void set_fireplace_mode_switch(IltoSwitch *s) { this->fireplace_mode_switch_ = s; }
   void set_mode_select(IltoModeSelect *s) { this->mode_select_ = s; }
+  void set_step_select(IltoStepSelect *s) { this->step_select_ = s; }
+  SUB_SENSOR(boost_time)
+  // CASA: the unit's own clock, from type 0x55, e.g. "Fri 19:23".
+  void set_unit_clock_text_sensor(text_sensor::TextSensor *s) { this->unit_clock_text_sensor_ = s; }
+  // CASA: the panel's basic display, "Basic display 1" (3-step) or "Basic display 2" (5-step).
+  void set_basic_display_text_sensor(text_sensor::TextSensor *s) { this->basic_display_text_sensor_ = s; }
 
   static constexpr size_t MODE_OFF = 0;  // 1-5 are the fan speeds
   static constexpr size_t MODE_FIREPLACE = 6;
+
+  // IltoStepSelect's options: the panel's step byte and boost minutes for each.
+  static constexpr size_t STEP_COUNT = 6;
+  static constexpr uint8_t STEP_CODE[STEP_COUNT] = {0x00, 0x01, 0x02, 0x02, 0x02, 0x02};
+  static constexpr uint8_t STEP_MINUTES[STEP_COUNT] = {0, 0, 30, 60, 120, 0};
+
+  // Away / Home / Boost on the CASA layout, sent as the panel's last-seen 20 00 81 command with only
+  // the step and minutes changed. Nothing is sent when the unit already reports that choice.
+  void set_step(size_t index) {
+    if (index >= STEP_COUNT)
+      return;
+    if (this->layout_ == LAYOUT_CASA && this->casa_five_step_ == 1) {
+      ESP_LOGW(TAG, "Away / Home / Boost needs the panel's 3-step screen (basic display 1); not sent");
+      return;
+    }
+    if (index == this->published_step_ && !this->command_waiting_(0x20, 0x81)) {
+      ESP_LOGD(TAG, "Already in that mode, nothing sent");
+      return;
+    }
+    std::vector<uint8_t> data = this->step_command_;
+    data[3] = STEP_CODE[index];
+    data[10] = STEP_MINUTES[index];
+    this->queue_(std::move(data));
+  }
 
   // Brings the unit to Off, speed 1-5 or Fireplace with the fewest commands: switches it on first
   // if needed, and ends fireplace mode before a speed is set (whether a speed command alone ends
@@ -160,6 +239,8 @@ class IltoPremium : public Component, public uart::UARTDevice {
   SUB_BINARY_SENSOR(service_reminder)
   SUB_BINARY_SENSOR(fan_failure)
   SUB_BINARY_SENSOR(emergency_stop)
+  SUB_BINARY_SENSOR(after_heating)
+  SUB_BINARY_SENSOR(after_heating_enabled)
 
   void set_flow_control_pin(GPIOPin *pin) { this->flow_control_pin_ = pin; }
   // A separate UART to send on, e.g. a software UART when the receiving UART's TX pin cannot be
@@ -183,13 +264,31 @@ class IltoPremium : public Component, public uart::UARTDevice {
       return;
     }
     std::vector<uint8_t> data = this->speed_command_;
+    if (this->layout_ == LAYOUT_CASA) {
+      // CASA: only with the panel's 5-step screen (Main menu -> Basic display 2), whose command this is.
+      if (this->casa_five_step_ != 1) {
+        ESP_LOGW(TAG, "Fan speed needs the panel's 5-step screen (basic display 2); not sent");
+        return;
+      }
+      data = this->casa_speed_command_;
+    }
     data[6] = speed * 20;
     this->queue_(std::move(data));
   }
 
   // The panel's off/on commands are its speed command with 0x10 / 0x20 in place of 0x0C.
+  // On CASA it is the panel's 3-step command with 0x10 / 0x20 in place of 0x81. The form depends on
+  // the layout, so nothing can be queued before the first frame has shown which one it is.
   void set_power(bool on) {
-    std::vector<uint8_t> data = this->speed_command_;
+    if (this->layout_ == LAYOUT_UNKNOWN) {
+      ESP_LOGW(TAG, "Bus layout not seen yet; power command not sent");
+      return;
+    }
+    if (this->running_ == (on ? 1 : 0) && !this->command_waiting_(0x20, 0x10) && !this->command_waiting_(0x20, 0x20)) {
+      ESP_LOGD(TAG, "The unit is already %s, nothing sent", on ? "on" : "off");
+      return;
+    }
+    std::vector<uint8_t> data = this->layout_ == LAYOUT_CASA ? this->step_command_ : this->speed_command_;
     data[2] = on ? 0x20 : 0x10;
     this->queue_(std::move(data));
   }
@@ -200,7 +299,22 @@ class IltoPremium : public Component, public uart::UARTDevice {
     this->queue_({0x54, 0x00, 0x01, weekday, hour, minute, second});
   }
 
-  void set_fireplace(bool on) { this->queue_({0x30, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, uint8_t(on ? 0x02 : 0x01)}); }
+  // Fireplace mode on / off; the same frame on both layouts. Nothing is sent when the unit already
+  // reports that state and no fireplace command is waiting.
+  void set_fireplace(bool on) {
+    if (this->fireplace_ == (on ? 1 : 0) && !this->command_waiting_(0x30)) {
+      ESP_LOGD(TAG, "Fireplace mode is already %s, nothing sent", on ? "on" : "off");
+      return;
+    }
+    // CASA: the panel offers fireplace mode only while the unit runs; starting it on a stopped unit was
+    // never captured.
+    if (on && this->layout_ == LAYOUT_CASA && this->running_ == 0) {
+      ESP_LOGW(TAG, "The unit is off; fireplace mode not sent");
+      return;
+    }
+    this->queue_({0x30, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, uint8_t(on ? 0x02 : 0x01)});
+    this->fireplace_ = on;
+  }
 
   void loop() override {
     uint8_t b;
@@ -211,7 +325,20 @@ class IltoPremium : public Component, public uart::UARTDevice {
       this->recent_[this->recent_pos_++ % sizeof(this->recent_)] = b;
       this->feed_(b);
     }
-    if (this->pending_.empty() && !this->commands_.empty()) {
+    // Commands queued before the first good frame (e.g. the clock sync at boot) wait until the
+    // layout is known; those the layout has no known form for are then dropped.
+    if (this->layout_ != LAYOUT_UNKNOWN) {
+      for (auto it = this->commands_.begin(); it != this->commands_.end();) {
+        if (supported_(this->layout_, *it)) {
+          ++it;
+        } else {
+          ESP_LOGW(TAG, "%s is not known on the %s bus layout; not sent", format_hex_pretty(*it).c_str(),
+                   layout_name_(this->layout_));
+          it = this->commands_.erase(it);
+        }
+      }
+    }
+    if (this->layout_ != LAYOUT_UNKNOWN && this->pending_.empty() && !this->commands_.empty()) {
       this->pending_ = std::move(this->commands_.front());
       this->commands_.pop_front();
       this->attempts_ = 0;
@@ -225,7 +352,7 @@ class IltoPremium : public Component, public uart::UARTDevice {
           this->pending_.clear();
         }
       }
-      if (!this->pending_.empty() && !this->awaiting_ack_ && now - this->last_rx_ >= QUIET_MS)
+      if (!this->pending_.empty() && !this->awaiting_ack_ && this->may_send_(now))
         this->send_pending_();
     }
     // Wiring check: is anything arriving, and does it frame up?
@@ -242,22 +369,32 @@ class IltoPremium : public Component, public uart::UARTDevice {
 
   void dump_config() override {
     ESP_LOGCONFIG(TAG, "ILTO Premium bus %s", this->flow_control_pin_ != nullptr ? "listener and sender" : "listener (receive only)");
+    ESP_LOGCONFIG(TAG, "  Bus layout: %s", layout_name_(this->layout_));
     LOG_PIN("  Flow control pin: ", this->flow_control_pin_);
   }
+
+  // The two frame layouts seen on the bus (see the comment at the top).
+  enum Layout : uint8_t { LAYOUT_UNKNOWN, LAYOUT_ILTO, LAYOUT_CASA };
 
   float get_setup_priority() const override { return setup_priority::DATA; }
 
  protected:
-  static constexpr size_t HEADER_LEN = 7;  // 64 a b c d e len
-  static constexpr uint8_t MAX_LEN = 30;   // swegongw's limit for the len byte
+  static constexpr size_t HEADER_LEN = 7;       // ILTO layout: 64 a b c d e len
+  static constexpr size_t CASA_HEADER_LEN = 5;  // CASA layout: 64 flags dst src len
+  static constexpr uint8_t MAX_LEN = 30;        // swegongw's limit for the len byte
   static constexpr size_t MAX_SEEN = 48;   // distinct header + type remembered for logging
   static constexpr uint32_t QUIET_MS = 30;         // bus idle this long before sending
+  // CASA: send between 5 and 70 ms after the panel's empty answer (the next frame starts ~100 ms in).
+  static constexpr uint32_t CASA_SLOT_QUIET_MS = 5;
+  static constexpr uint32_t CASA_SLOT_END_MS = 70;
   static constexpr uint32_t ACK_TIMEOUT_MS = 500;  // resend after this without an ack
   static constexpr uint8_t MAX_ATTEMPTS = 3;
 
   uint8_t buf_[HEADER_LEN + MAX_LEN + 2];
   size_t pos_{0};
   bool in_frame_{false};
+  bool crc_failed_{false};  // a candidate length was reached in this frame but its CRC did not match
+  Layout layout_{LAYOUT_UNKNOWN};
   uint32_t frames_ok_{0};
   uint32_t frames_bad_{0};
   uint32_t bytes_{0};
@@ -270,6 +407,27 @@ class IltoPremium : public Component, public uart::UARTDevice {
   uart::UARTComponent *tx_uart_{nullptr};
   // The panel's speed command as seen on the bus (here at speed 1); updated from the panel.
   std::vector<uint8_t> speed_command_{0x20, 0x00, 0x0C, 0x01, 0x00, 0x01, 0x14, 0x01, 0x01, 0x00};
+  // CASA: the panel's 3-step command as captured (here Home); updated from the panel.
+  std::vector<uint8_t> step_command_{0x20, 0x00, 0x81, 0x01, 0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 0x00};
+  // CASA: the panel's 5-step speed command as captured (here speed 2); updated from the panel.
+  std::vector<uint8_t> casa_speed_command_{0x20, 0x00, 0x08, 0x01, 0x00, 0x01, 0x28, 0x00, 0x00, 0x00, 0x00};
+  // CASA: 1 while the panel shows the 5-step screen, 0 with the 3-step screen, -1 before a status.
+  int8_t casa_five_step_{-1};
+  bool casa_slot_open_{false};
+  uint32_t casa_slot_at_{0};
+  IltoStepSelect *step_select_{nullptr};
+  text_sensor::TextSensor *unit_clock_text_sensor_{nullptr};
+  text_sensor::TextSensor *basic_display_text_sensor_{nullptr};
+  size_t published_step_{SIZE_MAX};
+  // Boost minutes of the last 3-step command seen on the bus (the panel's or ours), to tell the
+  // timed boosts apart in the select; 0 while unknown.
+  uint8_t boost_minutes_{0};
+  // The running timed boost's length (0: none), when it was first seen, and whether that moment is
+  // its real start (false for a boost already running when the first status arrived).
+  uint8_t boost_length_{0};
+  uint32_t boost_started_at_{0};
+  bool boost_start_known_{false};
+  bool boost_length_seen_{false};
   std::deque<std::vector<uint8_t>> commands_;  // commands (type onwards) not sent yet
   std::vector<uint8_t> pending_;               // the command being sent, until the unit acks it
   bool awaiting_ack_{false};
@@ -300,11 +458,16 @@ class IltoPremium : public Component, public uart::UARTDevice {
     }
     return false;
   }
-  bool speed_command_waiting_() const { return this->command_waiting_(0x20, 0x0C); }
+  bool speed_command_waiting_() const { return this->command_waiting_(0x20, 0x0C) || this->command_waiting_(0x20, 0x08); }
 
   void queue_(std::vector<uint8_t> data) {
     if (this->flow_control_pin_ == nullptr) {
       ESP_LOGW(TAG, "Cannot send without flow_control_pin");
+      return;
+    }
+    if (this->layout_ != LAYOUT_UNKNOWN && !supported_(this->layout_, data)) {
+      ESP_LOGW(TAG, "%s is not known on the %s bus layout; not sent", format_hex_pretty(data).c_str(),
+               layout_name_(this->layout_));
       return;
     }
     // A newer command of the same kind replaces one still waiting (e.g. several speed steps).
@@ -317,15 +480,62 @@ class IltoPremium : public Component, public uart::UARTDevice {
     this->commands_.push_back(std::move(data));
   }
 
+  // Which commands have a known form on each layout. CASA: its own 0x20 forms (3-step, off / on,
+  // 5-step speed), which in turn are not known on ILTO, and the clock and fireplace commands.
+  static bool supported_(Layout layout, const std::vector<uint8_t> &data) {
+    // CASA knows the panel's 11-byte 0x20 command with select 81 (3-step), 10 (off) and 20 (on), and
+    // the clock commands, which have the same form on both layouts.
+    const bool casa_form = data.size() == 11 && data[0] == 0x20 &&
+                           (data[2] == 0x81 || data[2] == 0x10 || data[2] == 0x20 || data[2] == 0x08);
+    const bool clock = data.size() == 7 && data[0] == 0x54 && (data[2] == 0x0E || data[2] == 0x01);
+    // Fireplace start / stop: 30 00 10 00 00 00 00 <02 | 01>, also the same on both layouts.
+    const bool fireplace = data.size() == 8 && data[0] == 0x30 && data[2] == 0x10;
+    if (layout == LAYOUT_CASA)
+      return casa_form || clock || fireplace;
+    return !(data.size() > 2 && data[0] == 0x20 && data[2] == 0x81) && !casa_form;
+  }
+
+  // ILTO: the panel polls and the bus is idle for about a second between polls, so any pause will
+  // do. CASA: the unit polls the panel and the panel puts its command in its answer; the only quiet
+  // spot known is the ~100 ms after the panel's empty answer, before the unit's next broadcast, so
+  // send there - after the bus has been idle a moment, and well before the window closes.
+  bool may_send_(uint32_t now) const {
+    if (this->layout_ == LAYOUT_ILTO)
+      return now - this->last_rx_ >= QUIET_MS;
+    if (this->layout_ == LAYOUT_CASA)
+      return this->casa_slot_open_ && now - this->last_rx_ >= CASA_SLOT_QUIET_MS &&
+             now - this->casa_slot_at_ < CASA_SLOT_END_MS;
+    return false;
+  }
+
   void send_pending_() {
+    std::vector<uint8_t> out;
+    if (this->layout_ == LAYOUT_CASA) {
+      // As the panel sends it: request flags 45, to the unit (0A), from the panel (01). No length
+      // byte before CC on this layout.
+      std::vector<uint8_t> body{0x64, 0x45, 0x0A, 0x01, uint8_t(this->pending_.size())};
+      body.insert(body.end(), this->pending_.begin(), this->pending_.end());
+      const uint16_t crc = crc16_ccitt_(body.data(), body.size());
+      out.push_back(0xCC);
+      out.insert(out.end(), body.begin(), body.end());
+      out.push_back(crc >> 8);
+      out.push_back(crc & 0xFF);
+      this->casa_slot_open_ = false;  // one try per window
+      this->transmit_(out);
+      return;
+    }
     std::vector<uint8_t> body{0x64, 0x4A, 0x00, 0xFD, 0x00, 0xFD, uint8_t(this->pending_.size())};
     body.insert(body.end(), this->pending_.begin(), this->pending_.end());
     const uint16_t crc = crc16_ccitt_(body.data(), body.size());
-    std::vector<uint8_t> out{uint8_t(1 + body.size() + 2), 0xCC};
+    out.push_back(uint8_t(1 + body.size() + 2));
+    out.push_back(0xCC);
     out.insert(out.end(), body.begin(), body.end());
     out.push_back(crc >> 8);
     out.push_back(crc & 0xFF);
+    this->transmit_(out);
+  }
 
+  void transmit_(const std::vector<uint8_t> &out) {
     uart::UARTComponent *tx = this->tx_uart_ != nullptr ? this->tx_uart_ : this->parent_;
     this->flow_control_pin_->digital_write(true);
     tx->write_array(out);
@@ -340,26 +550,70 @@ class IltoPremium : public Component, public uart::UARTDevice {
     ESP_LOGD(TAG, "Sent (try %u): %s", (unsigned) this->attempts_, format_hex_pretty(out).c_str());
   }
 
+  static size_t header_len_(Layout layout) { return layout == LAYOUT_CASA ? CASA_HEADER_LEN : HEADER_LEN; }
+  static const char *layout_name_(Layout layout) {
+    switch (layout) {
+      case LAYOUT_ILTO:
+        return "ILTO (long header)";
+      case LAYOUT_CASA:
+        return "CASA (short header)";
+      default:
+        return "not seen yet";
+    }
+  }
+
+  // Restart on this byte if it could itself be a start marker.
+  void restart_(uint8_t b) {
+    this->in_frame_ = b == 0xCC;
+    this->pos_ = 0;
+    this->crc_failed_ = false;
+  }
+
+  // Collects the bytes after CC. The length byte sits at a different place in each layout, so both
+  // are tried; a frame is taken when its length is complete and the CRC matches. Neither layout's
+  // length byte is plausible in the other's frames (an ILTO header has 00 where CASA has its length,
+  // a CASA frame has the type, always above MAX_LEN so far, where ILTO has its length), and the CRC
+  // rules out the rest.
   void feed_(uint8_t b) {
     if (!this->in_frame_) {
-      if (b == 0xCC) {
-        this->in_frame_ = true;
-        this->pos_ = 0;
-      }
+      if (b == 0xCC)
+        this->restart_(b);
       return;
     }
     this->buf_[this->pos_++] = b;
-    bool bad = this->buf_[0] != 0x64 ||
-               (this->pos_ == HEADER_LEN && (this->buf_[6] < 3 || this->buf_[6] > MAX_LEN));
-    if (bad) {
-      // Restart on this byte if it could itself be a start marker.
-      this->in_frame_ = b == 0xCC;
-      this->pos_ = 0;
+    if (this->buf_[0] != 0x64) {
+      this->restart_(b);
       return;
     }
-    if (this->pos_ > HEADER_LEN && this->pos_ == HEADER_LEN + this->buf_[6] + 2) {
-      this->handle_frame_();
-      this->in_frame_ = false;
+    bool possible = false;
+    for (Layout layout : {LAYOUT_CASA, LAYOUT_ILTO}) {
+      const size_t header = header_len_(layout);
+      if (this->pos_ < header) {
+        possible = true;
+        continue;
+      }
+      const uint8_t len = this->buf_[header - 1];
+      if (len < 3 || len > MAX_LEN)
+        continue;
+      const size_t total = header + len + 2;
+      if (this->pos_ < total) {
+        possible = true;
+      } else if (this->pos_ == total) {
+        const uint16_t crc = (uint16_t(this->buf_[total - 2]) << 8) | this->buf_[total - 1];
+        if (crc16_ccitt_(this->buf_, total - 2) == crc) {
+          this->handle_frame_(layout, total);
+          this->in_frame_ = false;
+          return;
+        }
+        this->crc_failed_ = true;
+      }
+    }
+    if (!possible) {
+      if (this->crc_failed_) {
+        this->frames_bad_++;
+        ESP_LOGV(TAG, "CRC mismatch: CC %s", format_hex_pretty(this->buf_, this->pos_ - 1).c_str());
+      }
+      this->restart_(b);
     }
   }
 
@@ -373,25 +627,30 @@ class IltoPremium : public Component, public uart::UARTDevice {
     return crc;
   }
 
-  void handle_frame_() {
-    const size_t len = this->pos_;
-    const uint16_t crc = (uint16_t(this->buf_[len - 2]) << 8) | this->buf_[len - 1];
-    if (crc16_ccitt_(this->buf_, len - 2) != crc) {
-      this->frames_bad_++;
-      ESP_LOGV(TAG, "CRC mismatch: CC %s", format_hex_pretty(this->buf_, len).c_str());
-      return;
-    }
+  // A frame with a good CRC, len bytes from 64 to the end of the CRC.
+  void handle_frame_(Layout layout, size_t len) {
     this->frames_ok_++;
+    if (layout != this->layout_) {
+      if (this->layout_ == LAYOUT_UNKNOWN) {
+        ESP_LOGI(TAG, "Bus layout: %s", layout_name_(layout));
+      } else {
+        ESP_LOGW(TAG, "Bus layout changed from %s to %s", layout_name_(this->layout_), layout_name_(layout));
+      }
+      this->layout_ = layout;
+    }
 
-    const uint8_t type = this->buf_[7];
-    const uint8_t *p = this->buf_ + 10;
-    const size_t n = this->buf_[6] - 3;
+    // From the type on, both layouts carry: type, two bytes (00 FF / 00-01 A0), payload.
+    const size_t header = header_len_(layout);
+    const uint8_t type = this->buf_[header];
+    const uint8_t *p = this->buf_ + header + 3;
+    const size_t n = this->buf_[header - 1] - 3;
 
     ESP_LOGV(TAG, "frame: CC %s", format_hex_pretty(this->buf_, len).c_str());
-    // Header bytes a..e plus the type tell the frames apart (request vs answer, which value).
+    // The header bytes plus the type tell the frames apart (request vs answer, which value).
     uint64_t key = type;
-    for (size_t i = 1; i <= 5; i++)
+    for (size_t i = 1; i < header - 1; i++)
       key = (key << 8) | this->buf_[i];
+    key = (key << 8) | layout;
     std::vector<uint8_t> body(this->buf_, this->buf_ + len - 2);
     auto it = this->seen_.find(key);
     if (it == this->seen_.end() || it->second != body) {
@@ -404,20 +663,68 @@ class IltoPremium : public Component, public uart::UARTDevice {
         this->seen_.emplace(key, std::move(body));
     }
 
-    if (this->awaiting_ack_ && this->buf_[1] == 0x8A && n == 0 && type == this->pending_[0] &&
-        this->buf_[9] == this->pending_[2]) {
-      ESP_LOGI(TAG, "Unit acknowledged %s", format_hex_pretty(this->pending_).c_str());
-      this->pending_.clear();
-      this->awaiting_ack_ = false;
-    }
     // A speed / power / mode command (the panel's or ours) changes the speed before the next status
     // shows it, so treat the speed as unknown until then.
     if (type == 0x20)
       this->reported_speed_ = 0;
-    if (this->buf_[1] == 0x4A && type == 0x20 && this->buf_[9] == 0x0C && n + 3 == this->speed_command_.size())
-      this->speed_command_.assign(this->buf_ + 7, this->buf_ + 7 + n + 3);
+    // Acks and the panel's commands are only known for the ILTO layout.
+    if (layout == LAYOUT_ILTO) {
+      if (this->awaiting_ack_ && this->buf_[1] == 0x8A && n == 0 && type == this->pending_[0] &&
+          this->buf_[9] == this->pending_[2]) {
+        ESP_LOGI(TAG, "Unit acknowledged %s", format_hex_pretty(this->pending_).c_str());
+        this->pending_.clear();
+        this->awaiting_ack_ = false;
+      }
+      if (this->buf_[1] == 0x4A && type == 0x20 && this->buf_[9] == 0x0C && n + 3 == this->speed_command_.size())
+        this->speed_command_.assign(this->buf_ + 7, this->buf_ + 7 + n + 3);
+    }
+    if (layout == LAYOUT_CASA) {
+      const uint8_t dst = this->buf_[2], src = this->buf_[3], select = this->buf_[7];
+      // The panel's empty answer to the unit's poll opens the window to send in.
+      if (src == 0x01 && dst == 0x0A && type == 0xA0) {
+        this->casa_slot_open_ = true;
+        this->casa_slot_at_ = millis();
+      }
+      // The panel's 3-step command: 20 00 81 <step> ... <minutes>. (Our own frames are not heard:
+      // the transceiver's receiver is off while it sends.)
+      if (src == 0x01 && dst == 0x0A && type == 0x20 && select == 0x81 && n + 3 == this->step_command_.size()) {
+        this->step_command_.assign(this->buf_ + 5, this->buf_ + 5 + n + 3);
+        this->boost_minutes_ = this->step_command_[3] == 0x02 ? this->step_command_[10] : 0;
+      }
+      // The panel's 5-step speed command: 20 00 08 01 00 01 <speed x 20 %> 00 00 00 00.
+      if (src == 0x01 && dst == 0x0A && type == 0x20 && select == 0x08 && n + 3 == this->casa_speed_command_.size()) {
+        this->casa_speed_command_.assign(this->buf_ + 5, this->buf_ + 5 + n + 3);
+      }
+      // The unit's ack to the panel: 20 00 81 01 <step> <fan %>, or 20 00 10 01 / 20 00 20 01 for
+      // off / on.
+      const bool ack_matches = select == 0x81 ? n >= 2 && p[1] == this->pending_[3] : n >= 1;
+      if (this->awaiting_ack_ && src == 0x0A && dst == 0x01 && type == this->pending_[0] && select == this->pending_[2] &&
+          ack_matches) {
+        ESP_LOGI(TAG, "Unit acknowledged %s", format_hex_pretty(this->pending_).c_str());
+        this->boost_minutes_ = this->pending_[3] == 0x02 ? this->pending_[10] : 0;
+        this->pending_.clear();
+        this->awaiting_ack_ = false;
+      }
+    }
 
     switch (type) {
+      case 0x4D:
+        // CASA: the unit's after-heating setting, p[2] 03 on / 01 off (the panel changes it with type 0x4C,
+        // which is left on the panel on purpose).
+        if (layout == LAYOUT_CASA && n >= 3)
+          publish_(this->after_heating_enabled_binary_sensor_, p[2] & 0x02);
+        break;
+      case 0x55:
+        // CASA: the unit's clock, <weekday, Monday = 0> <h> <min> <s>, broadcast every ~25 s.
+        if (layout == LAYOUT_CASA && n >= 4 && this->unit_clock_text_sensor_ != nullptr && p[0] < 7 && p[1] < 24 &&
+            p[2] < 60) {
+          static const char *const DAYS[] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
+          char text[16];
+          snprintf(text, sizeof(text), "%s %02u:%02u", DAYS[p[0]], p[1], p[2]);
+          if (this->unit_clock_text_sensor_->state != text)
+            this->unit_clock_text_sensor_->publish_state(text);
+        }
+        break;
       case 0x21:
         if (n >= 4) {
           publish_(this->operating_mode_sensor_, p[0]);
@@ -442,27 +749,87 @@ class IltoPremium : public Component, public uart::UARTDevice {
         break;
       case 0x73:
         // Checked on an ILTO 440 econo: p[12]/p[13] are the supply/extract fan power in %
-        // (0 when the unit is switched off, supply 100 / extract 20 in fireplace mode) and
+        // (0 when the unit is switched off, supply 100 / extract 20 in fireplace mode; 60 / 20 on the
+        // CASA unit) and
         // p[17] the selected speed x 20 %, p[19] 1 while the unit is switched off. The other bits
         // are openHAB's.
         if (n >= 20) {
+          // p[4] & 0x20: the panel shows the 3-step Away / Home / Boost screen, and p[17] is then not
+          // the speed the fans run at, so the speed is reported as unknown.
+          const bool three_step = p[4] & 0x20;
+          // Bit 0 of p[19] is "switched off" (the ILTO's p[19] was 1); the CASA unit sets 0x20 there
+          // during a timed boost.
+          const bool off = p[19] & 0x01;
           publish_(this->supply_fan_power_sensor_, p[12]);
           publish_(this->extract_fan_power_sensor_, p[13]);
           // The selected speed while running, 0 while switched off.
-          publish_(this->fan_speed_sensor_, p[19] ? 0 : p[17] / 20);
-          publish_(this->running_binary_sensor_, p[19] == 0);
+          // The CASA unit leaves p[17] at 0, and p[4] lost its 0x20 after an off/on, so its speed is
+          // never known from here.
+          // On CASA, p[15] (and p[9]) is 01 with the 5-step screen; the speed is then the fan power / 20
+          // (p[17] stays 0). With the 3-step screen the speed is not known.
+          const bool casa_five = layout == LAYOUT_CASA && p[15] == 0x01;
+          if (layout == LAYOUT_CASA) {
+            this->casa_five_step_ = casa_five;
+            const char *display = casa_five ? "Basic display 2" : "Basic display 1";
+            if (this->basic_display_text_sensor_ != nullptr && this->basic_display_text_sensor_->state != display)
+              this->basic_display_text_sensor_->publish_state(display);
+          }
+          const int speed = casa_five ? clamp(p[12] / 20, 1, 5) : p[17] / 20;
+          const bool speed_unknown = layout == LAYOUT_CASA ? !casa_five : three_step;
+          publish_(this->fan_speed_sensor_, off ? 0.0f : speed_unknown ? NAN : float(speed));
+          publish_(this->running_binary_sensor_, !off);
           if (this->ventilation_switch_ != nullptr)
-            this->ventilation_switch_->publish_state(p[19] == 0);
-          this->reported_speed_ = (p[4] & 0x20) ? 0 : p[17] / 20;
+            this->ventilation_switch_->publish_state(!off);
+          this->reported_speed_ = speed_unknown ? 0 : speed;
           // Keep the expected state while a power / fireplace command is still waiting to be sent.
           if (!this->command_waiting_(0x20, 0x10) && !this->command_waiting_(0x20, 0x20))
-            this->running_ = p[19] == 0;
+            this->running_ = !off;
           if (!this->command_waiting_(0x30))
             this->fireplace_ = p[1] & 0x01;
-          const size_t mode = p[19]            ? MODE_OFF
+          // CASA: p[14] is the 3-step choice (00 Away, 01 Home, 02 Boost), p[5] the boost's chosen
+          // length in minutes (it does not count down) and p[19] & 0x20 a boost with a time limit.
+          if (layout == LAYOUT_CASA && !off && !casa_five) {
+            const bool timed = p[19] & 0x20;
+            // The unit does not report the time left, so count it from when this boost was first seen
+            // (a new length restarts it, as the panel's does). A boost already running when the ESP
+            // started has an unknown start, so its time left stays unknown.
+            const uint8_t boost_length = p[14] == 0x02 && timed ? p[5] : 0;
+            const uint32_t now = millis();
+            if (boost_length != this->boost_length_) {
+              this->boost_started_at_ = now;
+              this->boost_start_known_ = this->boost_length_seen_;
+              this->boost_length_ = boost_length;
+            }
+            this->boost_length_seen_ = true;
+            float left = 0.0f;
+            if (boost_length != 0) {
+              const uint32_t elapsed_min = (now - this->boost_started_at_) / 60000;
+              left = !this->boost_start_known_ ? NAN : elapsed_min >= boost_length ? 0.0f : float(boost_length - elapsed_min);
+            }
+            publish_(this->boost_time_sensor_, left);
+            size_t step = SIZE_MAX;
+            if (p[14] == 0x00 || p[14] == 0x01) {
+              step = p[14];
+            } else if (p[14] == 0x02 && !timed) {
+              step = 5;
+            } else if (p[14] == 0x02) {
+              // The duration chosen last, if a 3-step command has been seen; otherwise the shortest
+              // option that covers the minutes the unit reports.
+              const uint8_t minutes = this->boost_minutes_ != 0 ? this->boost_minutes_ : p[5];
+              step = minutes <= 30 ? 2 : minutes <= 60 ? 3 : 4;
+            }
+            if (this->step_select_ != nullptr && step != SIZE_MAX && step != this->published_step_ &&
+                !this->command_waiting_(0x20, 0x81)) {
+              this->published_step_ = step;
+              this->step_select_->publish_state(step);
+            }
+          }
+          const size_t mode = off              ? MODE_OFF
                               : (p[1] & 0x01) ? MODE_FIREPLACE
-                                              : size_t(clamp(p[17] / 20, 1, 5));
-          if (this->mode_select_ != nullptr && mode != this->published_mode_) {
+                                              : size_t(clamp(speed, 1, 5));
+          // With the 3-step screen a speed mode is not known; show nothing rather than a wrong speed.
+          const bool mode_known = !speed_unknown || mode == MODE_OFF || mode == MODE_FIREPLACE;
+          if (this->mode_select_ != nullptr && mode_known && mode != this->published_mode_) {
             this->published_mode_ = mode;
             this->mode_select_->publish_state(mode);
           }
@@ -479,6 +846,10 @@ class IltoPremium : public Component, public uart::UARTDevice {
           publish_(this->fan_failure_binary_sensor_, p[7] & 0x18);
           publish_(this->filter_alarm_binary_sensor_, p[8] & 0x02);
           publish_(this->service_reminder_binary_sensor_, p[8] & 0x04);
+          // CASA: p[0] C1 while the panel's LED blinked orange (heater on), 40 with after-heating switched
+          // off on the panel, C0 right after switching it back on. Only published on that layout.
+          if (layout == LAYOUT_CASA)
+            publish_(this->after_heating_binary_sensor_, (p[0] & 0x81) == 0x81);
         }
         break;
     }
@@ -499,6 +870,7 @@ class IltoPremium : public Component, public uart::UARTDevice {
 // The select and switches keep their old state until the unit's next status shows the change
 // (about 2 s).
 inline void IltoModeSelect::control(size_t index) { this->parent_->set_mode(index); }
+inline void IltoStepSelect::control(size_t index) { this->parent_->set_step(index); }
 
 inline void IltoSwitch::write_state(bool state) {
   if (this->kind_ == POWER)
