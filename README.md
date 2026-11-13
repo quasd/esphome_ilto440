@@ -39,10 +39,10 @@ panel. See [docs/protocol.md](docs/protocol.md#settings-not-decoded-on-purpose).
 
 Tested units:
 
-| Unit | Panel | Bridge | Bus layout | Confirmed on the unit | Built from captures, not yet tried from Home Assistant |
-|---|---|---|---|---|---|
-| ILTO 440 econo | Premium (2008, 4P4C sockets) | ESP8266 (NodeMCU v3) + MAX485 | ILTO | Reading, speed 1-5, on/off, fireplace, clock | - |
-| ILTO 440 Premium | Premium, 3-step screen (basic display 1) | ESP32 (NodeMCU ESP-WROOM-32) + MAX3485 auto-direction module | CASA | Reading, Away / Home / Boost, on/off | Clock, speed 1-5 (basic display 2), fireplace, the return to Home when a timed boost ends |
+| Unit | Panel | Bridge | Bus layout | Confirmed on the unit |
+|---|---|---|---|---|
+| ILTO 440 econo | Premium (2008, 4P4C sockets) | ESP8266 (NodeMCU v3) + MAX485 | ILTO | Reading, speed 1-5, on/off, fireplace, clock |
+| ILTO 440 Premium | Premium, 3-step screen (basic display 1) | ESP32 (NodeMCU ESP-WROOM-32) + MAX3485 auto-direction module | CASA | Reading, Away / Home / Boost (the unit returns to Home when a timed boost ends), on/off, speed 1-5 (basic display 2), fireplace, clock |
 
 The bus protocol is the one Swegon CASA units use (see [docs/protocol.md](docs/protocol.md)), so
 other ILTO / Swegon CASA models with the Premium panel are likely to work, possibly with a different
