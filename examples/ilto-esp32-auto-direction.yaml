@@ -80,6 +80,14 @@ ilto_premium:
   # Which screen the panel shows: decides whether step_mode or the speed select works.
   basic_display:
     name: "Basic display"
+  # The electric after-heater heating (the panel's LED blinks orange), and the panel's setting for it.
+  after_heating:
+    name: "After-heating"
+    icon: mdi:radiator
+  after_heating_enabled:
+    name: "After-heating enabled"
+    icon: mdi:radiator-disabled
+    entity_category: diagnostic
   # Speed 1-5 (the package's Ventilation select and Fan speed) works on the CASA layout only with the
   # panel's 5-step screen (basic display 2). This unit uses the 3-step screen, so they are removed;
   # with the 5-step screen keep them and remove step_mode instead.

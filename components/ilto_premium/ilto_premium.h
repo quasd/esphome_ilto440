@@ -58,6 +58,8 @@
 //   p[4]         0x01 normally, 0x21 with the 3-step screen, 0x00 for about a minute after
 //                fireplace mode or an off/on
 //   p[8]         0x00 / 0x40 / 0xC0, changes around off/on (meaning unknown)
+//   CASA p[0]    0x80 electric after-heating in use (cleared when it is switched off on the panel, and while
+//                the unit is off), 0x01 with it: the heater is heating (the panel's LED blinks orange)
 //   p[9], p[14], p[15], p[18]  follow the panel's screen type and the current 3-step mode
 //   p[12], p[13] supply / extract fan power, %
 //   p[17]        selected speed x 20 %
@@ -237,6 +239,8 @@ class IltoPremium : public Component, public uart::UARTDevice {
   SUB_BINARY_SENSOR(service_reminder)
   SUB_BINARY_SENSOR(fan_failure)
   SUB_BINARY_SENSOR(emergency_stop)
+  SUB_BINARY_SENSOR(after_heating)
+  SUB_BINARY_SENSOR(after_heating_enabled)
 
   void set_flow_control_pin(GPIOPin *pin) { this->flow_control_pin_ = pin; }
   // A separate UART to send on, e.g. a software UART when the receiving UART's TX pin cannot be
@@ -704,6 +708,12 @@ class IltoPremium : public Component, public uart::UARTDevice {
     }
 
     switch (type) {
+      case 0x4D:
+        // CASA: the unit's after-heating setting, p[2] 03 on / 01 off (the panel changes it with type 0x4C,
+        // which is left on the panel on purpose).
+        if (layout == LAYOUT_CASA && n >= 3)
+          publish_(this->after_heating_enabled_binary_sensor_, p[2] & 0x02);
+        break;
       case 0x55:
         // CASA: the unit's clock, <weekday, Monday = 0> <h> <min> <s>, broadcast every ~25 s.
         if (layout == LAYOUT_CASA && n >= 4 && this->unit_clock_text_sensor_ != nullptr && p[0] < 7 && p[1] < 24 &&
@@ -836,6 +846,10 @@ class IltoPremium : public Component, public uart::UARTDevice {
           publish_(this->fan_failure_binary_sensor_, p[7] & 0x18);
           publish_(this->filter_alarm_binary_sensor_, p[8] & 0x02);
           publish_(this->service_reminder_binary_sensor_, p[8] & 0x04);
+          // CASA: p[0] C1 while the panel's LED blinked orange (heater on), 40 with after-heating switched
+          // off on the panel, C0 right after switching it back on. Only published on that layout.
+          if (layout == LAYOUT_CASA)
+            publish_(this->after_heating_binary_sensor_, (p[0] & 0x81) == 0x81);
         }
         break;
     }

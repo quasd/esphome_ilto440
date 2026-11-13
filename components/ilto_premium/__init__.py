@@ -61,7 +61,7 @@ FAN_RPMS = ["supply_fan_rpm", "extract_fan_rpm"]
 FAN_POWERS = ["supply_fan_power", "extract_fan_power"]
 # Raw codes whose meaning is not documented yet; kept as diagnostics to learn them.
 RAW_CODES = ["operating_mode", "unit_state"]
-STATES = ["fireplace", "running", "bypass", "boost", "defrosting", "freeze_protection"]
+STATES = ["fireplace", "running", "bypass", "boost", "defrosting", "freeze_protection", "after_heating", "after_heating_enabled"]
 PROBLEMS = ["filter_alarm", "service_reminder", "fan_failure", "emergency_stop"]
 
 SCHEMA = {

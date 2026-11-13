@@ -211,6 +211,8 @@ id(ilto).set_step(2);             // CASA layout: 0 Away, 1 Home, 2-4 Boost 30/6
 | Unit clock (`unit_clock`) | text sensor (diagnostic) | CASA layout only, not in the package: the unit's own weekday and time, e.g. `Fri 19:23` |
 | Clock sync | switch (config) | On by default: set the unit's clock after boot and at 04:05 daily |
 | Sync clock now | button (config) | |
+| After-heating (`after_heating`) | binary sensor | CASA layout only, not in the package: the electric after-heater is heating, as the panel's orange blinking LED |
+| After-heating enabled (`after_heating_enabled`) | binary sensor | CASA layout only, not in the package: the panel's after-heating setting (main menu). Read only: change it on the panel |
 | Heat recovery bypass, External boost, Defrosting, Freeze protection, Filter alarm, Service reminder, Fan failure, Emergency stop | binary sensor | Bit positions from the openHAB binding, not yet seen changing on an ILTO |
 
 All sensors have device and state classes, so Home Assistant keeps long-term statistics.

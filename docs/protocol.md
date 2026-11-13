@@ -119,12 +119,13 @@ Checked against the panel's service screens on the tested unit.
 | Byte | Meaning |
 |---|---|
 | p[0] | 0x40 constant on the tested unit. openHAB: 0x01 heating, 0x02 cooling, 0x04 bypass, 0x08 freeze protection, 0x10 preheating, 0x20 chilling, 0x40 preheater overheat, 0x80 reheating |
+| p[0] (CASA) | C1 running with the electric after-heater heating (the panel's LED blinks orange), 40 with after-heating switched off on the panel, C0 right after switching it back on, 41 while the unit is off. So 0x80 = after-heating in use, 0x80 + 0x01 = heating (confirmed: the heater stopping by itself on its outdoor temperature limit cleared 0x01, LED green) |
 | p[1] | 0x01 fireplace mode (confirmed). openHAB: 0x02 underpressure compensation, 0x04 external boost, 0x08 humidity boost, 0x10 CO2 boost, 0x20 defrosting |
 | p[2] | 0x04 while the fans run, 0x00 when stopped |
 | p[3] | openHAB: 0x04 external boost function, 0x08 external fireplace, 0x10 filter guard, 0x20 IR freeze protection, 0x80 emergency stop |
 | p[4] | 0x01 normally, 0x21 with the 3-step display, 0x00 for about a minute after fireplace mode or off/on. During that start-up phase the unit stores a new speed at once (p[17]) but the fans keep the start speed until it ends (seen: ~40 s) |
 | p[7] | openHAB: alarms - 0x08 supply fan failure, 0x10 extract fan failure, ... |
-| p[8] | 0x00 / 0x40 / 0xC0, changes around off/on (unknown). openHAB: 0x02 filter guard alarm, 0x04 service reminder |
+| p[8] | 0x00 / 0x40 / 0xC0, changes around off/on. Not the after-heater: it stayed 40 when after-heating was switched off and on. 0x80 only while switched off. openHAB: 0x02 filter guard alarm, 0x04 service reminder |
 | p[9], p[14], p[15], p[18] | Follow the display layout and the current Away / Home / Boost step |
 | p[12], p[13] | Supply / extract fan power, % |
 | p[16] | 0x10 constant |
@@ -233,6 +234,26 @@ panel's empty answer** (`CC 64 85 0A 01 04 A0 00 00 00`): the next frame starts 
 the 18 bytes take under 5 ms. It sends 5-70 ms after that answer, at most once per round, and tries
 three rounds before giving up. Confirmed on the unit: Away and Home sent this way were acked
 within ~10 ms on the first try, the fans changed (20 % / 40 %) and the status followed.
+
+### Electric after-heating on the CASA layout
+
+Switching after-heating off and back on in the panel's main menu, with the heater heating (LED
+blinking orange):
+
+```
+CC 64 45 0A 01 0E 4C 00 02 00 AA 01 00 02 01 FF FF EC 00 2D ..   panel: after-heating off
+CC 64 85 01 0A 04 4C 00 02 01 ..                                  unit acks
+CC 64 45 0A 01 0E 4C 00 07 00 AA 03 00 02 01 FF FF EC 00 2D ..   panel: after-heating on
+CC 64 85 01 0A 04 4C 00 07 01 ..                                  unit acks
+```
+
+The unit's broadcast type 0x4D carries the same settings (`00 AA <03 on | 01 off> 00 02 01 FF FF EC
+00 2D`), and 0x73 p[0] went C1 -> 40 (off) -> C0 (on again) -> C1 within two minutes, with the LED
+blinking orange again. 0x4D p[2] & 0x02 is the `after_heating_enabled` sensor, and 0x73 p[0] 0x80 +
+0x01 the `after_heating` one. The 0x4C command is a main-menu setting and is left on the panel on
+purpose. Confirmed on the unit: raising the after-heater's outdoor temperature limit (main menu) with
+the setting on stopped the heater - the LED turned green, `after_heating` went off and
+`after_heating_enabled` stayed on.
 
 ### Fireplace mode on the CASA layout
 
