@@ -73,6 +73,9 @@ ilto_premium:
   # The unit's own clock (kept in step by the package's Clock sync).
   unit_clock:
     name: "Unit clock"
+  # Which screen the panel shows: decides whether step_mode or the speed select works.
+  basic_display:
+    name: "Basic display"
   # Speed 1-5 (the package's Ventilation select and Fan speed) works on the CASA layout only with the
   # panel's 5-step screen (basic display 2). This unit uses the 3-step screen, so they are removed;
   # with the 5-step screen keep them and remove step_mode instead.

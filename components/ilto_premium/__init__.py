@@ -102,6 +102,10 @@ SCHEMA[cv.Optional("step_mode")] = select.select_schema(IltoStepSelect, icon="md
 SCHEMA[cv.Optional("unit_clock")] = text_sensor.text_sensor_schema(
     icon="mdi:clock-outline", entity_category=ENTITY_CATEGORY_DIAGNOSTIC
 )
+# The panel's basic display from 0x73 p[15], "Basic display 1" / "Basic display 2" (CASA bus layout).
+SCHEMA[cv.Optional("basic_display")] = text_sensor.text_sensor_schema(
+    icon="mdi:monitor-dashboard", entity_category=ENTITY_CATEGORY_DIAGNOSTIC
+)
 # Minutes left of a timed boost (CASA bus layout), counted by the ESP from the boost's start; 0 otherwise.
 SCHEMA[cv.Optional("boost_time")] = sensor.sensor_schema(
     unit_of_measurement=UNIT_MINUTE,
@@ -175,6 +179,9 @@ async def to_code(config):
         sel = await select.new_select(config["mode"], options=MODE_OPTIONS)
         await cg.register_parented(sel, var)
         cg.add(var.set_mode_select(sel))
+    if "basic_display" in config:
+        ts = await text_sensor.new_text_sensor(config["basic_display"])
+        cg.add(var.set_basic_display_text_sensor(ts))
     if "unit_clock" in config:
         ts = await text_sensor.new_text_sensor(config["unit_clock"])
         cg.add(var.set_unit_clock_text_sensor(ts))

@@ -55,6 +55,8 @@ protocol knowledge or the entities change.
   5-step screen: speed `20 00 08 01 00 01 <speed x 20 %> 00 00 00 00` (`casa_speed_command_`), screen
   switch `20 00 04 01 00 <00|01> 28 ...`; 0x73 p[15] = 01 with the 5-step screen (`casa_five_step_`),
   speed = p[12] / 20. Speed commands only with the 5-step screen, 3-step commands only without.
+  `basic_display` text sensor shows the screen. The screen switch command is known but **left out
+  on purpose** (owner's decision): the screen stays the panel's choice. Don't add it as a control.
   Clock: the ILTO's `54 00 0E` / `54 00 01` commands unchanged (Monday = 0), acked `54 00 0E 01` /
   `54 00 01 01`; type 0x55 broadcasts `<weekday> <h> <min> <s>` (the `unit_clock` text sensor).
   `supported_()` says which commands have a known form per layout; anything else is dropped with a

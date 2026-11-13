@@ -250,7 +250,13 @@ the 3-step frames). With the 5-step screen, 0x73 p[9] and p[15] are 01 (00 with 
 screen), p[12] / p[13] follow the speed (20-100 %) and p[17] stays 0, so the component reads the
 speed as p[12] / 20. p[14] stayed 01 and is not a 3-step choice then. Switching back to the 3-step
 screen set p[4] to 21 again (it had been 01 since the off / on). The component sends the speed
-command only while p[15] shows the 5-step screen, and the 3-step command only while it does not.
+command only while p[15] shows the 5-step screen, and the 3-step command only while it does not,
+and shows the screen in the `basic_display` text sensor.
+
+**The screen command (`20 00 04 ...`) is recorded here but deliberately not implemented**: which
+screen the panel shows is the owner's choice on the panel. To add it later, send
+`20 00 04 01 00 <00 | 01> 28 00 00 00 00` the same way as the other CASA commands and wait for the
+ack `20 00 04 01` and p[15] to change.
 
 ### Clock on the CASA layout
 

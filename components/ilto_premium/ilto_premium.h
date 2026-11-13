@@ -99,7 +99,9 @@
 // in the pause after the panel's empty answer. Off and on are the same 11 bytes with 10 / 20 in place
 // of 81 (acked 20 00 10 01 / 20 00 20 01). With the panel's 5-step screen (basic display 2) the
 // speed command is 20 00 08 01 00 01 <speed x 20 %> 00 00 00 00 (acked 20 00 08 01 01 <%>), and 0x73
-// p[15] = 01; the screen itself is switched with 20 00 04 01 00 <00 3-step | 01 5-step> 28 00 00 00 00.
+// p[15] = 01; the screen itself is switched with 20 00 04 01 00 <00 3-step | 01 5-step> 28 00 00 00 00
+// (acked 20 00 04 01). That command is known but deliberately not sent: the screen is the panel's
+// choice, shown read-only by the basic_display text sensor.
 // The clock commands are the ILTO's (54 00 0E / 54 00 01 <weekday, Monday = 0> <h> <min> <s>, acked
 // 54 00 0E 01 / 54 00 01 01), and type 0x55 carries the unit's clock: <weekday> <h> <min> <s>. The
 // fireplace command is not known on this layout and is dropped with a warning. Both layouts are tried on
@@ -167,6 +169,8 @@ class IltoPremium : public Component, public uart::UARTDevice {
   SUB_SENSOR(boost_time)
   // CASA: the unit's own clock, from type 0x55, e.g. "Fri 19:23".
   void set_unit_clock_text_sensor(text_sensor::TextSensor *s) { this->unit_clock_text_sensor_ = s; }
+  // CASA: the panel's basic display, "Basic display 1" (3-step) or "Basic display 2" (5-step).
+  void set_basic_display_text_sensor(text_sensor::TextSensor *s) { this->basic_display_text_sensor_ = s; }
 
   static constexpr size_t MODE_OFF = 0;  // 1-5 are the fan speeds
   static constexpr size_t MODE_FIREPLACE = 6;
@@ -391,6 +395,7 @@ class IltoPremium : public Component, public uart::UARTDevice {
   uint32_t casa_slot_at_{0};
   IltoStepSelect *step_select_{nullptr};
   text_sensor::TextSensor *unit_clock_text_sensor_{nullptr};
+  text_sensor::TextSensor *basic_display_text_sensor_{nullptr};
   size_t published_step_{SIZE_MAX};
   // Boost minutes of the last 3-step command seen on the bus (the panel's or ours), to tell the
   // timed boosts apart in the select; 0 while unknown.
@@ -732,8 +737,12 @@ class IltoPremium : public Component, public uart::UARTDevice {
           // On CASA, p[15] (and p[9]) is 01 with the 5-step screen; the speed is then the fan power / 20
           // (p[17] stays 0). With the 3-step screen the speed is not known.
           const bool casa_five = layout == LAYOUT_CASA && p[15] == 0x01;
-          if (layout == LAYOUT_CASA)
+          if (layout == LAYOUT_CASA) {
             this->casa_five_step_ = casa_five;
+            const char *display = casa_five ? "Basic display 2" : "Basic display 1";
+            if (this->basic_display_text_sensor_ != nullptr && this->basic_display_text_sensor_->state != display)
+              this->basic_display_text_sensor_->publish_state(display);
+          }
           const int speed = casa_five ? clamp(p[12] / 20, 1, 5) : p[17] / 20;
           const bool speed_unknown = layout == LAYOUT_CASA ? !casa_five : three_step;
           publish_(this->fan_speed_sensor_, off ? 0.0f : speed_unknown ? NAN : float(speed));
