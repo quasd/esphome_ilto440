@@ -18,7 +18,7 @@
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
 
-// Use at your own risk: unofficial and reverse-engineered, tested on one unit only, no warranty.
+// Use at your own risk: unofficial and reverse-engineered, tested on two units only, no warranty.
 // Written by Claude (Anthropic's AI assistant). See the repository README.md.
 //
 // Driver for the bus between an ILTO / Swegon CASA Premium ventilation unit and its control

@@ -6,7 +6,7 @@
 # mode and power the way the panel does, and keeps the unit's clock and weekday in step with
 # Home Assistant ("Clock sync" switch).
 #
-# Use at your own risk: unofficial and reverse-engineered, tested on one unit only, no warranty.
+# Use at your own risk: unofficial and reverse-engineered, tested on two units only, no warranty.
 # Written by Claude (Anthropic's AI assistant). See README.md: https://github.com/quasd/esphome_ilto440
 #
 # Include from a device file (see examples/):

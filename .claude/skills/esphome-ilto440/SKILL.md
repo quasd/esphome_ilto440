@@ -7,7 +7,8 @@ description: Working on esphome_ilto440, the ESPHome component and package that 
 
 An ESP8266 with a MAX485 module sits on the RS-485 bus between an ILTO / Swegon CASA ventilation
 unit and its Premium panel, reads everything the panel polls, and sends the panel's own commands.
-It was reverse-engineered on one unit (ILTO 440 econo, Premium panel from 2008); the protocol
+It was reverse-engineered on two units (ILTO 440 econo with a 2008 Premium panel, ILTO layout; ILTO 440
+Premium, CASA layout, ESP32 + MAX3485); the protocol
 was written down from captures, not from documentation.
 
 ## Layout
