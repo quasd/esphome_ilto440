@@ -4,7 +4,7 @@
 import esphome.codegen as cg
 from esphome import pins
 import esphome.config_validation as cv
-from esphome.components import binary_sensor, select, sensor, switch, uart
+from esphome.components import binary_sensor, select, sensor, switch, text_sensor, uart
 from esphome.const import (
     CONF_ID,
     CONF_RESTORE_MODE,
@@ -22,7 +22,7 @@ from esphome.const import (
 )
 
 DEPENDENCIES = ["uart"]
-AUTO_LOAD = ["sensor", "binary_sensor", "select", "switch"]
+AUTO_LOAD = ["sensor", "binary_sensor", "select", "switch", "text_sensor"]
 
 ilto_premium_ns = cg.esphome_ns.namespace("ilto_premium")
 IltoPremium = ilto_premium_ns.class_("IltoPremium", cg.Component, uart.UARTDevice)
@@ -98,6 +98,10 @@ SCHEMA = {
 SCHEMA[cv.Optional("mode")] = select.select_schema(IltoModeSelect, icon="mdi:fan")
 # Away / Home / Boost, as the panel's 3-step screen (CASA bus layout only).
 SCHEMA[cv.Optional("step_mode")] = select.select_schema(IltoStepSelect, icon="mdi:home-switch")
+# The unit's own clock, "Fri 19:23" (CASA bus layout).
+SCHEMA[cv.Optional("unit_clock")] = text_sensor.text_sensor_schema(
+    icon="mdi:clock-outline", entity_category=ENTITY_CATEGORY_DIAGNOSTIC
+)
 # Minutes left of a timed boost (CASA bus layout), counted by the ESP from the boost's start; 0 otherwise.
 SCHEMA[cv.Optional("boost_time")] = sensor.sensor_schema(
     unit_of_measurement=UNIT_MINUTE,
@@ -171,6 +175,9 @@ async def to_code(config):
         sel = await select.new_select(config["mode"], options=MODE_OPTIONS)
         await cg.register_parented(sel, var)
         cg.add(var.set_mode_select(sel))
+    if "unit_clock" in config:
+        ts = await text_sensor.new_text_sensor(config["unit_clock"])
+        cg.add(var.set_unit_clock_text_sensor(ts))
     if "step_mode" in config:
         sel = await select.new_select(config["step_mode"], options=STEP_OPTIONS)
         await cg.register_parented(sel, var)

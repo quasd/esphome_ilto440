@@ -233,8 +233,30 @@ panel's empty answer** (`CC 64 85 0A 01 04 A0 00 00 00`): the next frame starts 
 the 18 bytes take under 5 ms. It sends 5-70 ms after that answer, at most once per round, and tries
 three rounds before giving up. Confirmed on the unit: Away and Home sent this way were acked
 within ~10 ms on the first try, the fans changed (20 % / 40 %) and the status followed. Not
-captured yet on this layout: speed 1-5 with the 5-step screen, fireplace, clock; those
-commands are dropped with a warning.
+captured yet on this layout: speed 1-5 with the 5-step screen and fireplace; those commands are
+dropped with a warning.
+
+### Clock on the CASA layout
+
+The unit broadcasts its clock as one of the rotating types, about every 25 s:
+
+```
+CC 64 85 FD 0A 07 55 00 A0 <weekday> <h> <min> <s> crc crc     weekday Monday = 0
+```
+
+Setting the clock on the panel (Main menu -> Clock) sent the ILTO layout's clock commands
+unchanged, each acked:
+
+```
+CC 64 45 0A 01 07 54 00 0E <weekday> <h> <min> <s> crc crc   set the time    (acked 54 00 0E 01)
+CC 64 45 0A 01 07 54 00 01 <weekday> <h> <min> <s> crc crc   set the weekday (acked 54 00 01 01)
+```
+
+The panel's time command carried the unit's old weekday (05) and the weekday command that followed
+the new one (04, Friday); setting Saturday then Friday sent 05 then 04, so Monday = 0, as on the
+ILTO. Before the clock was set the unit reported Saturday 08:33 on a Friday at 19:10. After the time
+command the unit also broadcast `45 FD 0A 05 AA 00 00 01 0A` once and the panel answered
+`85 0A 01 04 AA 00 00 01` (meaning unknown).
 
 ## Settings not decoded, on purpose
 

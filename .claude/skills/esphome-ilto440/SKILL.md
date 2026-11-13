@@ -52,6 +52,8 @@ protocol knowledge or the entities change.
   builds them from `step_command_` and refuses while the layout is unknown. 0x73 after off: p[19] 01,
   p[20] 03/04; after on p[20] 05 -> 07, p[4] comes back as 01 (not 21), so on CASA the fan speed is
   always unknown.
+  Clock: the ILTO's `54 00 0E` / `54 00 01` commands unchanged (Monday = 0), acked `54 00 0E 01` /
+  `54 00 01 01`; type 0x55 broadcasts `<weekday> <h> <min> <s>` (the `unit_clock` text sensor).
   `supported_()` says which commands have a known form per layout; anything else is dropped with a
   warning, queued ones too. An ILTO-layout frame sent onto the CASA bus only collided with the
   unit's traffic - never send a frame whose form was not captured on that layout. To add a command:

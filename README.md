@@ -46,7 +46,7 @@ by itself (the log says `Bus layout: ...` once the first frame arrives):
 | Layout | Seen on | Reading | Control (speed, on/off, fireplace, clock) |
 |---|---|---|---|
 | ILTO, long header (`CC 64 4A 00 FD 00 FD ...`, panel is bus master) | ILTO 440 econo | Yes | Yes |
-| CASA, short header (`CC 64 85 FD 0A ...`, unit is bus master) | ILTO 440 Premium (ESP32 + MAX3485) | Yes: temperatures, efficiency, fan power, running, Away / Home / Boost | Away / Home / Boost 30-120 min / Boost (the **Ventilation mode** select), off / on (the **Ventilation** switch). Speed 1-5, fireplace and clock are not captured yet and are dropped with a warning |
+| CASA, short header (`CC 64 85 FD 0A ...`, unit is bus master) | ILTO 440 Premium (ESP32 + MAX3485) | Yes: temperatures, efficiency, fan power, running, Away / Home / Boost | Away / Home / Boost 30-120 min / Boost (the **Ventilation mode** select), off / on (the **Ventilation** switch), clock sync. Speed 1-5 and fireplace are not captured yet and are dropped with a warning |
 
 ## Parts
 
@@ -158,7 +158,7 @@ ilto_premium:
 |---|---|
 | [examples/ilto-minimal.yaml](examples/ilto-minimal.yaml) | The tested unit's configuration: the package plus `!remove` |
 | [examples/ilto-custom-pins.yaml](examples/ilto-custom-pins.yaml) | The same with DI and DE/RE on other pins |
-| [examples/ilto-esp32-auto-direction.yaml](examples/ilto-esp32-auto-direction.yaml) | ESP32 with a 3.3 V RS-485 module that switches direction by itself (MAX3485 boards without DE/RE pins): no resistors, `ilto_bus_inverted: "false"`, A/B the right way round. Also the CASA-layout unit's setup: Ventilation mode select, Ventilation on/off switch, Boost time left, clock sync off |
+| [examples/ilto-esp32-auto-direction.yaml](examples/ilto-esp32-auto-direction.yaml) | ESP32 with a 3.3 V RS-485 module that switches direction by itself (MAX3485 boards without DE/RE pins): no resistors, `ilto_bus_inverted: "false"`, A/B the right way round. Also the CASA-layout unit's setup: Ventilation mode select, Ventilation on/off switch, Boost time left, Unit clock |
 
 From your own ESPHome lambdas the component offers:
 
@@ -185,6 +185,7 @@ id(ilto).set_step(2);             // CASA layout: 0 Away, 1 Home, 2-4 Boost 30/6
 | Ventilation mode (`step_mode`) | select | CASA layout only, not in the package (see the ESP32 example): Away, Home, Boost 30 / 60 / 120 min, Boost - the panel's 3-step screen. Shows the unit's choice and sends the panel's command |
 | Boost time left (`boost_time`) | sensor, min | CASA layout only: minutes left of a timed boost, 0 otherwise. The unit reports only the boost's length, so the ESP counts from when the boost started; for a boost already running when the ESP started it is unknown |
 | Ventilation (`ventilation`) | switch | Optional, not in the package: the unit on / off, as the panel's main menu. Used by the ESP32 example for the CASA layout, where the speed select's commands are not known |
+| Unit clock (`unit_clock`) | text sensor (diagnostic) | CASA layout only, not in the package: the unit's own weekday and time, e.g. `Fri 19:23` |
 | Clock sync | switch (config) | On by default: set the unit's clock after boot and at 04:05 daily |
 | Sync clock now | button (config) | |
 | Heat recovery bypass, External boost, Defrosting, Freeze protection, Filter alarm, Service reminder, Fan failure, Emergency stop | binary sensor | Bit positions from the openHAB binding, not yet seen changing on an ILTO |
@@ -212,7 +213,7 @@ Two design points worth knowing:
 |---|---|
 | `bytes 0` in the log | No signal: module power (VIN is not 5 V on USB), GND not connected, or A/B not on the middle pair |
 | `bytes` growing, `frames ok 0` | Polarity: flip `ilto_bus_inverted`. If the last bytes look sensible (small numbers like room temperatures) the polarity is right and the unit may use an unknown frame layout: capture whole frames with the snippet below and open an issue |
-| "... is not known on the CASA (short header) bus layout; not sent" | Expected for the speed, power, fireplace and clock commands on that layout; use the Ventilation mode select (turn Clock sync off to silence the warning) |
+| "... is not known on the CASA (short header) bus layout; not sent" | Expected for the speed and fireplace commands on that layout; use the Ventilation mode select and the Ventilation switch |
 | Board does not boot after wiring | DI on D8 (GPIO15). Use D2 |
 | Commands log "No acknowledgement" | DE/RE not connected to the flow control pin, or DI not wired |
 | Home Assistant cannot connect, log says "Max connections" | Too many log sessions open (the ESP8266 allows 4); close them |

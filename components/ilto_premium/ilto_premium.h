@@ -12,6 +12,7 @@
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/select/select.h"
 #include "esphome/components/switch/switch.h"
+#include "esphome/components/text_sensor/text_sensor.h"
 #include "esphome/components/uart/uart.h"
 #include "esphome/core/component.h"
 #include "esphome/core/helpers.h"
@@ -97,7 +98,9 @@
 // and p[19] = 0x20 during a timed boost. The component sends the same command, as the panel (01),
 // in the pause after the panel's empty answer. Off and on are the same 11 bytes with 10 / 20 in place
 // of 81 (acked 20 00 10 01 / 20 00 20 01). The speed 1-5, fireplace and clock commands are not known
-// on this layout and are dropped with a warning. Both layouts are tried on
+// on this layout and are dropped with a warning. The clock commands are the ILTO's (54 00 0E / 54 00
+// 01 <weekday, Monday = 0> <h> <min> <s>, acked 54 00 0E 01 / 54 00 01 01), and type 0x55 carries the
+// unit's clock: <weekday> <h> <min> <s>. Both layouts are tried on
 // every frame and the CRC picks the one that fits; the first good frame fixes the layout for sending.
 
 namespace esphome::ilto_premium {
@@ -160,6 +163,8 @@ class IltoPremium : public Component, public uart::UARTDevice {
   void set_mode_select(IltoModeSelect *s) { this->mode_select_ = s; }
   void set_step_select(IltoStepSelect *s) { this->step_select_ = s; }
   SUB_SENSOR(boost_time)
+  // CASA: the unit's own clock, from type 0x55, e.g. "Fri 19:23".
+  void set_unit_clock_text_sensor(text_sensor::TextSensor *s) { this->unit_clock_text_sensor_ = s; }
 
   static constexpr size_t MODE_OFF = 0;  // 1-5 are the fan speeds
   static constexpr size_t MODE_FIREPLACE = 6;
@@ -367,6 +372,7 @@ class IltoPremium : public Component, public uart::UARTDevice {
   bool casa_slot_open_{false};
   uint32_t casa_slot_at_{0};
   IltoStepSelect *step_select_{nullptr};
+  text_sensor::TextSensor *unit_clock_text_sensor_{nullptr};
   size_t published_step_{SIZE_MAX};
   // Boost minutes of the last 3-step command seen on the bus (the panel's or ours), to tell the
   // timed boosts apart in the select; 0 while unknown.
@@ -432,11 +438,13 @@ class IltoPremium : public Component, public uart::UARTDevice {
   // Which commands have a known form on each layout: on CASA only the 3-step command (20 00 81),
   // which in turn is not known on ILTO.
   static bool supported_(Layout layout, const std::vector<uint8_t> &data) {
-    // CASA knows the panel's 11-byte 0x20 command with select 81 (3-step), 10 (off) and 20 (on).
+    // CASA knows the panel's 11-byte 0x20 command with select 81 (3-step), 10 (off) and 20 (on), and
+    // the clock commands, which have the same form on both layouts.
     const bool casa_form = data.size() == 11 && data[0] == 0x20 &&
                            (data[2] == 0x81 || data[2] == 0x10 || data[2] == 0x20);
+    const bool clock = data.size() == 7 && data[0] == 0x54 && (data[2] == 0x0E || data[2] == 0x01);
     if (layout == LAYOUT_CASA)
-      return casa_form;
+      return casa_form || clock;
     return !(data.size() > 2 && data[0] == 0x20 && data[2] == 0x81) && !casa_form;
   }
 
@@ -649,6 +657,17 @@ class IltoPremium : public Component, public uart::UARTDevice {
     }
 
     switch (type) {
+      case 0x55:
+        // CASA: the unit's clock, <weekday, Monday = 0> <h> <min> <s>, broadcast every ~25 s.
+        if (layout == LAYOUT_CASA && n >= 4 && this->unit_clock_text_sensor_ != nullptr && p[0] < 7 && p[1] < 24 &&
+            p[2] < 60) {
+          static const char *const DAYS[] = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"};
+          char text[16];
+          snprintf(text, sizeof(text), "%s %02u:%02u", DAYS[p[0]], p[1], p[2]);
+          if (this->unit_clock_text_sensor_->state != text)
+            this->unit_clock_text_sensor_->publish_state(text);
+        }
+        break;
       case 0x21:
         if (n >= 4) {
           publish_(this->operating_mode_sensor_, p[0]);
