@@ -215,8 +215,8 @@ unknown; the component keeps the panel's last-seen frame and changes only `<step
 The component sends the same frame, with the panel's address, **in the pause right after the
 panel's empty answer** (`CC 64 85 0A 01 04 A0 00 00 00`): the next frame starts ~100 ms later, and
 the 18 bytes take under 5 ms. It sends 5-70 ms after that answer, at most once per round, and tries
-three rounds before giving up. Whether the unit takes a command outside the panel's answer slot
-was not known when this was written; the ack in the log ("Unit acknowledged ...") tells. Not
+three rounds before giving up. Confirmed on the unit: Away and Home sent this way were acked
+within ~10 ms on the first try, the fans changed (20 % / 40 %) and the status followed. Not
 captured yet on this layout: speed 1-5 with the 5-step screen, off/on, fireplace, clock; those
 commands are dropped with a warning.
 
