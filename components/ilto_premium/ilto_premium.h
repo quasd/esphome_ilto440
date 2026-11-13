@@ -97,10 +97,12 @@
 // The status (0x73) then carries the choice in p[14] (00 / 01 / 02), the boost minutes in p[5],
 // and p[19] = 0x20 during a timed boost. The component sends the same command, as the panel (01),
 // in the pause after the panel's empty answer. Off and on are the same 11 bytes with 10 / 20 in place
-// of 81 (acked 20 00 10 01 / 20 00 20 01). The speed 1-5, fireplace and clock commands are not known
-// on this layout and are dropped with a warning. The clock commands are the ILTO's (54 00 0E / 54 00
-// 01 <weekday, Monday = 0> <h> <min> <s>, acked 54 00 0E 01 / 54 00 01 01), and type 0x55 carries the
-// unit's clock: <weekday> <h> <min> <s>. Both layouts are tried on
+// of 81 (acked 20 00 10 01 / 20 00 20 01). With the panel's 5-step screen (basic display 2) the
+// speed command is 20 00 08 01 00 01 <speed x 20 %> 00 00 00 00 (acked 20 00 08 01 01 <%>), and 0x73
+// p[15] = 01; the screen itself is switched with 20 00 04 01 00 <00 3-step | 01 5-step> 28 00 00 00 00.
+// The clock commands are the ILTO's (54 00 0E / 54 00 01 <weekday, Monday = 0> <h> <min> <s>, acked
+// 54 00 0E 01 / 54 00 01 01), and type 0x55 carries the unit's clock: <weekday> <h> <min> <s>. The
+// fireplace command is not known on this layout and is dropped with a warning. Both layouts are tried on
 // every frame and the CRC picks the one that fits; the first good frame fixes the layout for sending.
 
 namespace esphome::ilto_premium {
@@ -179,6 +181,10 @@ class IltoPremium : public Component, public uart::UARTDevice {
   void set_step(size_t index) {
     if (index >= STEP_COUNT)
       return;
+    if (this->layout_ == LAYOUT_CASA && this->casa_five_step_ == 1) {
+      ESP_LOGW(TAG, "Away / Home / Boost needs the panel's 3-step screen (basic display 1); not sent");
+      return;
+    }
     if (index == this->published_step_ && !this->command_waiting_(0x20, 0x81)) {
       ESP_LOGD(TAG, "Already in that mode, nothing sent");
       return;
@@ -247,6 +253,14 @@ class IltoPremium : public Component, public uart::UARTDevice {
       return;
     }
     std::vector<uint8_t> data = this->speed_command_;
+    if (this->layout_ == LAYOUT_CASA) {
+      // CASA: only with the panel's 5-step screen (Main menu -> Basic display 2), whose command this is.
+      if (this->casa_five_step_ != 1) {
+        ESP_LOGW(TAG, "Fan speed needs the panel's 5-step screen (basic display 2); not sent");
+        return;
+      }
+      data = this->casa_speed_command_;
+    }
     data[6] = speed * 20;
     this->queue_(std::move(data));
   }
@@ -369,6 +383,10 @@ class IltoPremium : public Component, public uart::UARTDevice {
   std::vector<uint8_t> speed_command_{0x20, 0x00, 0x0C, 0x01, 0x00, 0x01, 0x14, 0x01, 0x01, 0x00};
   // CASA: the panel's 3-step command as captured (here Home); updated from the panel.
   std::vector<uint8_t> step_command_{0x20, 0x00, 0x81, 0x01, 0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 0x00};
+  // CASA: the panel's 5-step speed command as captured (here speed 2); updated from the panel.
+  std::vector<uint8_t> casa_speed_command_{0x20, 0x00, 0x08, 0x01, 0x00, 0x01, 0x28, 0x00, 0x00, 0x00, 0x00};
+  // CASA: 1 while the panel shows the 5-step screen, 0 with the 3-step screen, -1 before a status.
+  int8_t casa_five_step_{-1};
   bool casa_slot_open_{false};
   uint32_t casa_slot_at_{0};
   IltoStepSelect *step_select_{nullptr};
@@ -413,7 +431,7 @@ class IltoPremium : public Component, public uart::UARTDevice {
     }
     return false;
   }
-  bool speed_command_waiting_() const { return this->command_waiting_(0x20, 0x0C); }
+  bool speed_command_waiting_() const { return this->command_waiting_(0x20, 0x0C) || this->command_waiting_(0x20, 0x08); }
 
   void queue_(std::vector<uint8_t> data) {
     if (this->flow_control_pin_ == nullptr) {
@@ -441,7 +459,7 @@ class IltoPremium : public Component, public uart::UARTDevice {
     // CASA knows the panel's 11-byte 0x20 command with select 81 (3-step), 10 (off) and 20 (on), and
     // the clock commands, which have the same form on both layouts.
     const bool casa_form = data.size() == 11 && data[0] == 0x20 &&
-                           (data[2] == 0x81 || data[2] == 0x10 || data[2] == 0x20);
+                           (data[2] == 0x81 || data[2] == 0x10 || data[2] == 0x20 || data[2] == 0x08);
     const bool clock = data.size() == 7 && data[0] == 0x54 && (data[2] == 0x0E || data[2] == 0x01);
     if (layout == LAYOUT_CASA)
       return casa_form || clock;
@@ -642,6 +660,10 @@ class IltoPremium : public Component, public uart::UARTDevice {
       // the transceiver's receiver is off while it sends.)
       if (src == 0x01 && dst == 0x0A && type == 0x20 && select == 0x81 && n + 3 == this->step_command_.size()) {
         this->step_command_.assign(this->buf_ + 5, this->buf_ + 5 + n + 3);
+      }
+      // The panel's 5-step speed command: 20 00 08 01 00 01 <speed x 20 %> 00 00 00 00.
+      if (src == 0x01 && dst == 0x0A && type == 0x20 && select == 0x08 && n + 3 == this->casa_speed_command_.size()) {
+        this->casa_speed_command_.assign(this->buf_ + 5, this->buf_ + 5 + n + 3);
         this->boost_minutes_ = this->step_command_[3] == 0x02 ? this->step_command_[10] : 0;
       }
       // The unit's ack to the panel: 20 00 81 01 <step> <fan %>, or 20 00 10 01 / 20 00 20 01 for
@@ -707,12 +729,18 @@ class IltoPremium : public Component, public uart::UARTDevice {
           // The selected speed while running, 0 while switched off.
           // The CASA unit leaves p[17] at 0, and p[4] lost its 0x20 after an off/on, so its speed is
           // never known from here.
-          const bool speed_unknown = three_step || layout == LAYOUT_CASA;
-          publish_(this->fan_speed_sensor_, off ? 0.0f : speed_unknown ? NAN : float(p[17] / 20));
+          // On CASA, p[15] (and p[9]) is 01 with the 5-step screen; the speed is then the fan power / 20
+          // (p[17] stays 0). With the 3-step screen the speed is not known.
+          const bool casa_five = layout == LAYOUT_CASA && p[15] == 0x01;
+          if (layout == LAYOUT_CASA)
+            this->casa_five_step_ = casa_five;
+          const int speed = casa_five ? clamp(p[12] / 20, 1, 5) : p[17] / 20;
+          const bool speed_unknown = layout == LAYOUT_CASA ? !casa_five : three_step;
+          publish_(this->fan_speed_sensor_, off ? 0.0f : speed_unknown ? NAN : float(speed));
           publish_(this->running_binary_sensor_, !off);
           if (this->ventilation_switch_ != nullptr)
             this->ventilation_switch_->publish_state(!off);
-          this->reported_speed_ = (p[4] & 0x20) ? 0 : p[17] / 20;
+          this->reported_speed_ = speed_unknown ? 0 : speed;
           // Keep the expected state while a power / fireplace command is still waiting to be sent.
           if (!this->command_waiting_(0x20, 0x10) && !this->command_waiting_(0x20, 0x20))
             this->running_ = !off;
@@ -720,7 +748,7 @@ class IltoPremium : public Component, public uart::UARTDevice {
             this->fireplace_ = p[1] & 0x01;
           // CASA: p[14] is the 3-step choice (00 Away, 01 Home, 02 Boost), p[5] the boost's chosen
           // length in minutes (it does not count down) and p[19] & 0x20 a boost with a time limit.
-          if (layout == LAYOUT_CASA && !off) {
+          if (layout == LAYOUT_CASA && !off && !casa_five) {
             const bool timed = p[19] & 0x20;
             // The unit does not report the time left, so count it from when this boost was first seen
             // (a new length restarts it, as the panel's does). A boost already running when the ESP
@@ -758,7 +786,7 @@ class IltoPremium : public Component, public uart::UARTDevice {
           }
           const size_t mode = off              ? MODE_OFF
                               : (p[1] & 0x01) ? MODE_FIREPLACE
-                                              : size_t(clamp(p[17] / 20, 1, 5));
+                                              : size_t(clamp(speed, 1, 5));
           // With the 3-step screen a speed mode is not known; show nothing rather than a wrong speed.
           const bool mode_known = !speed_unknown || mode == MODE_OFF || mode == MODE_FIREPLACE;
           if (this->mode_select_ != nullptr && mode_known && mode != this->published_mode_) {

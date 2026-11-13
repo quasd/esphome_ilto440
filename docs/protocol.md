@@ -233,8 +233,24 @@ panel's empty answer** (`CC 64 85 0A 01 04 A0 00 00 00`): the next frame starts 
 the 18 bytes take under 5 ms. It sends 5-70 ms after that answer, at most once per round, and tries
 three rounds before giving up. Confirmed on the unit: Away and Home sent this way were acked
 within ~10 ms on the first try, the fans changed (20 % / 40 %) and the status followed. Not
-captured yet on this layout: speed 1-5 with the 5-step screen and fireplace; those commands are
-dropped with a warning.
+captured yet on this layout: fireplace; that command is dropped with a warning.
+
+### 5-step screen on the CASA layout
+
+Switching the panel to basic display 2 (5 speeds) and back, and stepping through speeds 1-5:
+
+```
+20 00 04 01 00 <00 | 01> 28 00 00 00 00     screen: 00 3-step, 01 5-step (acked 20 00 04 01)
+20 00 08 01 00 01 <speed x 20 %> 00 00 00 00 speed 1-5: 14 28 3C 50 64 (acked 20 00 08 01 01 <%>)
+```
+
+So in the panel's 11-byte 0x20 command data[2] selects the field (81 3-step choice, 08 speed,
+04 screen, 10 off, 20 on), data[5] is the screen (00 / 01) and data[6] the speed x 20 % (28 in
+the 3-step frames). With the 5-step screen, 0x73 p[9] and p[15] are 01 (00 with the 3-step
+screen), p[12] / p[13] follow the speed (20-100 %) and p[17] stays 0, so the component reads the
+speed as p[12] / 20. p[14] stayed 01 and is not a 3-step choice then. Switching back to the 3-step
+screen set p[4] to 21 again (it had been 01 since the off / on). The component sends the speed
+command only while p[15] shows the 5-step screen, and the 3-step command only while it does not.
 
 ### Clock on the CASA layout
 

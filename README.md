@@ -46,7 +46,7 @@ by itself (the log says `Bus layout: ...` once the first frame arrives):
 | Layout | Seen on | Reading | Control (speed, on/off, fireplace, clock) |
 |---|---|---|---|
 | ILTO, long header (`CC 64 4A 00 FD 00 FD ...`, panel is bus master) | ILTO 440 econo | Yes | Yes |
-| CASA, short header (`CC 64 85 FD 0A ...`, unit is bus master) | ILTO 440 Premium (ESP32 + MAX3485) | Yes: temperatures, efficiency, fan power, running, Away / Home / Boost | Away / Home / Boost 30-120 min / Boost (the **Ventilation mode** select), off / on (the **Ventilation** switch), clock sync. Speed 1-5 and fireplace are not captured yet and are dropped with a warning |
+| CASA, short header (`CC 64 85 FD 0A ...`, unit is bus master) | ILTO 440 Premium (ESP32 + MAX3485) | Yes: temperatures, efficiency, fan power, running, Away / Home / Boost | Away / Home / Boost 30-120 min / Boost (the **Ventilation mode** select), off / on (the **Ventilation** switch), clock sync, and with the panel's 5-step screen (basic display 2) speed 1-5 (the package's **Ventilation** select). Fireplace is not captured yet and is dropped with a warning |
 
 ## Parts
 
@@ -177,7 +177,7 @@ id(ilto).set_step(2);             // CASA layout: 0 Away, 1 Home, 2-4 Boost 30/6
 |---|---|---|
 | Sensor 1-8 temperature | sensor, °C | Numbered as on the panel. Which duct each measures depends on the unit. The unit sends whole degrees; the 15 s average shows one decimal, which tells roughly where between two whole degrees the reading sits |
 | Heat recovery efficiency | sensor, % | |
-| Fan speed | sensor | Selected speed 1-5, 0 while the unit is off. Unknown while the panel shows the 3-step Away / Home / Boost screen, which does not report the speed, and always on the CASA layout |
+| Fan speed | sensor | Selected speed 1-5, 0 while the unit is off. Unknown while the panel shows the 3-step Away / Home / Boost screen, which does not report the speed. On the CASA layout read from the fan power with the 5-step screen |
 | Supply fan power, Extract fan power | sensor, % | 0 when the unit is off |
 | CO2, Humidity | sensor | Only with those options; scale unchecked |
 | Supply fan rpm, Extract fan rpm | sensor | Not reported by econo models |

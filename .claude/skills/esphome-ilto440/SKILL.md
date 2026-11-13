@@ -52,6 +52,9 @@ protocol knowledge or the entities change.
   builds them from `step_command_` and refuses while the layout is unknown. 0x73 after off: p[19] 01,
   p[20] 03/04; after on p[20] 05 -> 07, p[4] comes back as 01 (not 21), so on CASA the fan speed is
   always unknown.
+  5-step screen: speed `20 00 08 01 00 01 <speed x 20 %> 00 00 00 00` (`casa_speed_command_`), screen
+  switch `20 00 04 01 00 <00|01> 28 ...`; 0x73 p[15] = 01 with the 5-step screen (`casa_five_step_`),
+  speed = p[12] / 20. Speed commands only with the 5-step screen, 3-step commands only without.
   Clock: the ILTO's `54 00 0E` / `54 00 01` commands unchanged (Monday = 0), acked `54 00 0E 01` /
   `54 00 01 01`; type 0x55 broadcasts `<weekday> <h> <min> <s>` (the `unit_clock` text sensor).
   `supported_()` says which commands have a known form per layout; anything else is dropped with a

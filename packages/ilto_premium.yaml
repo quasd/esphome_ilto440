@@ -23,7 +23,7 @@
 # Two bus layouts are known (README, Compatibility); the component recognises either. On the CASA
 # layout the 3-step command (Away / Home / Boost), off / on and the clock are known: add `step_mode`,
 # `ventilation` and `unit_clock` (see examples/ilto-esp32-auto-direction.yaml); the Ventilation
-# select's speed and fireplace commands are dropped there with a warning.
+# select's speeds need the panel's 5-step screen there, and fireplace is dropped with a warning.
 #
 # Pins and bus polarity are substitutions; override them in the device file's `substitutions:`.
 # The defaults are for an ESP8266 with a 5 V MAX485 module (docs/wiring.svg):
