@@ -360,6 +360,12 @@ class IltoPremium : public Component, public uart::UARTDevice {
   // Boost minutes of the last 3-step command seen on the bus (the panel's or ours), to tell the
   // timed boosts apart in the select; 0 while unknown.
   uint8_t boost_minutes_{0};
+  // The running timed boost's length (0: none), when it was first seen, and whether that moment is
+  // its real start (false for a boost already running when the first status arrived).
+  uint8_t boost_length_{0};
+  uint32_t boost_started_at_{0};
+  bool boost_start_known_{false};
+  bool boost_length_seen_{false};
   std::deque<std::vector<uint8_t>> commands_;  // commands (type onwards) not sent yet
   std::vector<uint8_t> pending_;               // the command being sent, until the unit acks it
   bool awaiting_ack_{false};
@@ -673,12 +679,27 @@ class IltoPremium : public Component, public uart::UARTDevice {
             this->running_ = !off;
           if (!this->command_waiting_(0x30))
             this->fireplace_ = p[1] & 0x01;
-          // CASA: p[14] is the 3-step choice (00 Away, 01 Home, 02 Boost), p[5] the boost minutes
-          // and p[19] & 0x20 a boost with a time limit (all as captured; whether p[5] counts down
-          // was not watched long enough to tell).
+          // CASA: p[14] is the 3-step choice (00 Away, 01 Home, 02 Boost), p[5] the boost's chosen
+          // length in minutes (it does not count down) and p[19] & 0x20 a boost with a time limit.
           if (layout == LAYOUT_CASA && !off) {
             const bool timed = p[19] & 0x20;
-            publish_(this->boost_time_sensor_, p[14] == 0x02 && timed ? float(p[5]) : 0.0f);
+            // The unit does not report the time left, so count it from when this boost was first seen
+            // (a new length restarts it, as the panel's does). A boost already running when the ESP
+            // started has an unknown start, so its time left stays unknown.
+            const uint8_t boost_length = p[14] == 0x02 && timed ? p[5] : 0;
+            const uint32_t now = millis();
+            if (boost_length != this->boost_length_) {
+              this->boost_started_at_ = now;
+              this->boost_start_known_ = this->boost_length_seen_;
+              this->boost_length_ = boost_length;
+            }
+            this->boost_length_seen_ = true;
+            float left = 0.0f;
+            if (boost_length != 0) {
+              const uint32_t elapsed_min = (now - this->boost_started_at_) / 60000;
+              left = !this->boost_start_known_ ? NAN : elapsed_min >= boost_length ? 0.0f : float(boost_length - elapsed_min);
+            }
+            publish_(this->boost_time_sensor_, left);
             size_t step = SIZE_MAX;
             if (p[14] == 0x00 || p[14] == 0x01) {
               step = p[14];

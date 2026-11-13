@@ -98,7 +98,7 @@ SCHEMA = {
 SCHEMA[cv.Optional("mode")] = select.select_schema(IltoModeSelect, icon="mdi:fan")
 # Away / Home / Boost, as the panel's 3-step screen (CASA bus layout only).
 SCHEMA[cv.Optional("step_mode")] = select.select_schema(IltoStepSelect, icon="mdi:home-switch")
-# Minutes of a timed boost as the unit reports them (CASA bus layout), 0 otherwise.
+# Minutes left of a timed boost (CASA bus layout), counted by the ESP from the boost's start; 0 otherwise.
 SCHEMA[cv.Optional("boost_time")] = sensor.sensor_schema(
     unit_of_measurement=UNIT_MINUTE,
     accuracy_decimals=0,

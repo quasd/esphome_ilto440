@@ -183,7 +183,7 @@ id(ilto).set_step(2);             // CASA layout: 0 Away, 1 Home, 2-4 Boost 30/6
 | Supply fan rpm, Extract fan rpm | sensor | Not reported by econo models |
 | Ventilation | select | Off, 1-5 or Fireplace: the unit's state, and how to change it. Right after switching on, the unit keeps its start speed for about a minute before a new speed takes effect (Supply / Extract fan power show when). Fireplace runs supply 100 %, extract 20 % for ~10 min to start a fire, then the unit returns to its speed |
 | Ventilation mode (`step_mode`) | select | CASA layout only, not in the package (see the ESP32 example): Away, Home, Boost 30 / 60 / 120 min, Boost - the panel's 3-step screen. Shows the unit's choice and sends the panel's command |
-| Boost time (`boost_time`) | sensor, min | CASA layout only: the minutes of a timed boost as the unit reports them, 0 otherwise |
+| Boost time left (`boost_time`) | sensor, min | CASA layout only: minutes left of a timed boost, 0 otherwise. The unit reports only the boost's length, so the ESP counts from when the boost started; for a boost already running when the ESP started it is unknown |
 | Clock sync | switch (config) | On by default: set the unit's clock after boot and at 04:05 daily |
 | Sync clock now | button (config) | |
 | Heat recovery bypass, External boost, Defrosting, Freeze protection, Filter alarm, Service reminder, Fan failure, Emergency stop | binary sensor | Bit positions from the openHAB binding, not yet seen changing on an ILTO |

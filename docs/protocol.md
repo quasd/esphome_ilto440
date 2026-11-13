@@ -184,7 +184,7 @@ Payloads, checked on that unit against its panel's sensor screens:
 
   | Byte | Meaning |
   |---|---|
-  | p[5] | Boost minutes: 1E / 3C / 78 during a 30 / 60 / 120 min boost, 0 otherwise. Whether it counts down was not watched long enough to tell |
+  | p[5] | The boost's length: 1E / 3C / 78 during a 30 / 60 / 120 min boost, 0 otherwise. It stays at the length for the whole boost (checked over 30 min); the time left is not reported |
   | p[10] | Wanders between 0x40 and 0x59 whatever the mode (unknown) |
   | p[14] | The 3-step choice: 00 Away, 01 Home, 02 Boost |
   | p[19] | 0x20 during a timed boost, 00 otherwise (also with a boost without a time limit). On the ILTO p[19] = 1 meant switched off, so only bit 0 is read as "off" |

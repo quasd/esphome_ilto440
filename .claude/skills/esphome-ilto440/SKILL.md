@@ -45,7 +45,7 @@ protocol knowledge or the entities change.
   layouts on every frame and the CRC decides; the first good frame sets `layout_`.
 - **CASA commands**: the panel sends `45 0A 01 ... 20 00 81 <step> 00 00 28 00 00 00 <min>` in place
   of its empty answer to the poll; the unit acks `85 01 0A ... 20 00 81 01 <step> <fan %>`. Step 00
-  Away, 01 Home, 02 Boost; min 1E/3C/78 or 00 (no limit). Status 0x73: p[14] step, p[5] minutes,
+  Away, 01 Home, 02 Boost; min 1E/3C/78 or 00 (no limit). Status 0x73: p[14] step, p[5] the boost's length (does not count down; `boost_time` is the ESP's own countdown from the boost's start, unknown after a restart mid-boost),
   p[19] 0x20 during a timed boost (so "off" is `p[19] & 0x01` only). The component sends as the
   panel (01) 5-70 ms after the panel's empty answer (`casa_slot_*`), once per round, 3 tries.
   `supported_()` says which commands have a known form per layout; anything else is dropped with a

@@ -60,11 +60,11 @@ packages:
   ilto: github://quasd/esphome_ilto440/packages/ilto_premium.yaml@main
 
 ilto_premium:
-  # CASA layout: Away / Home / Boost, and the boost minutes.
+  # CASA layout: Away / Home / Boost, and the minutes left of a timed boost.
   step_mode:
     name: "Ventilation mode"
   boost_time:
-    name: "Boost time"
+    name: "Boost time left"
     filters:
       - delta: 0.5
   # The speed select's commands are not known on the CASA layout.
