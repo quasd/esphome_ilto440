@@ -103,8 +103,11 @@
 // (acked 20 00 04 01). That command is known but deliberately not sent: the screen is the panel's
 // choice, shown read-only by the basic_display text sensor.
 // The clock commands are the ILTO's (54 00 0E / 54 00 01 <weekday, Monday = 0> <h> <min> <s>, acked
-// 54 00 0E 01 / 54 00 01 01), and type 0x55 carries the unit's clock: <weekday> <h> <min> <s>. The
-// fireplace command is not known on this layout and is dropped with a warning. Both layouts are tried on
+// 54 00 0E 01 / 54 00 01 01), and type 0x55 carries the unit's clock: <weekday> <h> <min> <s>. So is
+// the fireplace command: 30 00 10 00 00 00 00 <02 start | 01 stop>, acked 30 00 10 01. During fireplace
+// mode 0x73 p[1] = 01 (00 otherwise), p[4] = 00 and the fans run supply 60 % / extract 20 % (from Home on
+// the tested unit); the panel shows "Takkatoiminto 10 min" and the unit ends it by itself. Fireplace is
+// not sent while the unit is off (never captured). Both layouts are tried on
 // every frame and the CRC picks the one that fits; the first good frame fixes the layout for sending.
 
 namespace esphome::ilto_premium {
@@ -292,7 +295,22 @@ class IltoPremium : public Component, public uart::UARTDevice {
     this->queue_({0x54, 0x00, 0x01, weekday, hour, minute, second});
   }
 
-  void set_fireplace(bool on) { this->queue_({0x30, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, uint8_t(on ? 0x02 : 0x01)}); }
+  // Fireplace mode on / off; the same frame on both layouts. Nothing is sent when the unit already
+  // reports that state and no fireplace command is waiting.
+  void set_fireplace(bool on) {
+    if (this->fireplace_ == (on ? 1 : 0) && !this->command_waiting_(0x30)) {
+      ESP_LOGD(TAG, "Fireplace mode is already %s, nothing sent", on ? "on" : "off");
+      return;
+    }
+    // CASA: the panel offers fireplace mode only while the unit runs; starting it on a stopped unit was
+    // never captured.
+    if (on && this->layout_ == LAYOUT_CASA && this->running_ == 0) {
+      ESP_LOGW(TAG, "The unit is off; fireplace mode not sent");
+      return;
+    }
+    this->queue_({0x30, 0x00, 0x10, 0x00, 0x00, 0x00, 0x00, uint8_t(on ? 0x02 : 0x01)});
+    this->fireplace_ = on;
+  }
 
   void loop() override {
     uint8_t b;
@@ -458,16 +476,18 @@ class IltoPremium : public Component, public uart::UARTDevice {
     this->commands_.push_back(std::move(data));
   }
 
-  // Which commands have a known form on each layout: on CASA only the 3-step command (20 00 81),
-  // which in turn is not known on ILTO.
+  // Which commands have a known form on each layout. CASA: its own 0x20 forms (3-step, off / on,
+  // 5-step speed), which in turn are not known on ILTO, and the clock and fireplace commands.
   static bool supported_(Layout layout, const std::vector<uint8_t> &data) {
     // CASA knows the panel's 11-byte 0x20 command with select 81 (3-step), 10 (off) and 20 (on), and
     // the clock commands, which have the same form on both layouts.
     const bool casa_form = data.size() == 11 && data[0] == 0x20 &&
                            (data[2] == 0x81 || data[2] == 0x10 || data[2] == 0x20 || data[2] == 0x08);
     const bool clock = data.size() == 7 && data[0] == 0x54 && (data[2] == 0x0E || data[2] == 0x01);
+    // Fireplace start / stop: 30 00 10 00 00 00 00 <02 | 01>, also the same on both layouts.
+    const bool fireplace = data.size() == 8 && data[0] == 0x30 && data[2] == 0x10;
     if (layout == LAYOUT_CASA)
-      return casa_form || clock;
+      return casa_form || clock || fireplace;
     return !(data.size() > 2 && data[0] == 0x20 && data[2] == 0x81) && !casa_form;
   }
 
@@ -665,11 +685,11 @@ class IltoPremium : public Component, public uart::UARTDevice {
       // the transceiver's receiver is off while it sends.)
       if (src == 0x01 && dst == 0x0A && type == 0x20 && select == 0x81 && n + 3 == this->step_command_.size()) {
         this->step_command_.assign(this->buf_ + 5, this->buf_ + 5 + n + 3);
+        this->boost_minutes_ = this->step_command_[3] == 0x02 ? this->step_command_[10] : 0;
       }
       // The panel's 5-step speed command: 20 00 08 01 00 01 <speed x 20 %> 00 00 00 00.
       if (src == 0x01 && dst == 0x0A && type == 0x20 && select == 0x08 && n + 3 == this->casa_speed_command_.size()) {
         this->casa_speed_command_.assign(this->buf_ + 5, this->buf_ + 5 + n + 3);
-        this->boost_minutes_ = this->step_command_[3] == 0x02 ? this->step_command_[10] : 0;
       }
       // The unit's ack to the panel: 20 00 81 01 <step> <fan %>, or 20 00 10 01 / 20 00 20 01 for
       // off / on.
@@ -719,7 +739,8 @@ class IltoPremium : public Component, public uart::UARTDevice {
         break;
       case 0x73:
         // Checked on an ILTO 440 econo: p[12]/p[13] are the supply/extract fan power in %
-        // (0 when the unit is switched off, supply 100 / extract 20 in fireplace mode) and
+        // (0 when the unit is switched off, supply 100 / extract 20 in fireplace mode; 60 / 20 on the
+        // CASA unit) and
         // p[17] the selected speed x 20 %, p[19] 1 while the unit is switched off. The other bits
         // are openHAB's.
         if (n >= 20) {

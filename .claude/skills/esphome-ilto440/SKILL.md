@@ -57,6 +57,8 @@ protocol knowledge or the entities change.
   speed = p[12] / 20. Speed commands only with the 5-step screen, 3-step commands only without.
   `basic_display` text sensor shows the screen. The screen switch command is known but **left out
   on purpose** (owner's decision): the screen stays the panel's choice. Don't add it as a control.
+  Fireplace: the ILTO's `30 00 10 00 00 00 00 <02|01>` unchanged, acked `30 00 10 01`; 0x73 p[1] = 01,
+  p[4] = 00, fans 60 / 20 % meanwhile. Not sent while the unit is off (never captured).
   Clock: the ILTO's `54 00 0E` / `54 00 01` commands unchanged (Monday = 0), acked `54 00 0E 01` /
   `54 00 01 01`; type 0x55 broadcasts `<weekday> <h> <min> <s>` (the `unit_clock` text sensor).
   `supported_()` says which commands have a known form per layout; anything else is dropped with a

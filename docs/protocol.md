@@ -232,8 +232,27 @@ The component sends the same frame, with the panel's address, **in the pause rig
 panel's empty answer** (`CC 64 85 0A 01 04 A0 00 00 00`): the next frame starts ~100 ms later, and
 the 18 bytes take under 5 ms. It sends 5-70 ms after that answer, at most once per round, and tries
 three rounds before giving up. Confirmed on the unit: Away and Home sent this way were acked
-within ~10 ms on the first try, the fans changed (20 % / 40 %) and the status followed. Not
-captured yet on this layout: fireplace; that command is dropped with a warning.
+within ~10 ms on the first try, the fans changed (20 % / 40 %) and the status followed.
+
+### Fireplace mode on the CASA layout
+
+Captured from Home on the 3-step screen: the panel's fireplace start and its "Lopeta" (stop) send the
+ILTO's own fireplace command, with the CASA header:
+
+```
+CC 64 45 0A 01 08 30 00 10 00 00 00 00 02 B1 65   panel: fireplace on
+CC 64 85 01 0A 04 30 00 10 01 41 59               unit acks
+CC 64 45 0A 01 08 30 00 10 00 00 00 00 01 81 06   panel: fireplace off
+CC 64 85 01 0A 04 30 00 10 01 41 59               unit acks
+```
+
+0x73 during fireplace mode: p[1] = 01 (00 in every other capture), p[4] = 00 (21 before and after),
+p[12] / p[13] = 3C / 14 (supply 60 %, extract 20 %); p[14] stays at the 3-step choice (Home). After
+the stop p[1] goes back to 00 at once and the fans to 40 / 40 within a second. The panel shows
+"Takkatoiminto 10 min" with Lopeta / Valikko, and "Takkatoiminto päättyy" briefly after the stop;
+the length (10 min) is a panel setting, and p[6] = 0A in every capture may be it (unconfirmed).
+The component sends the same frame; it refuses to start fireplace mode while the unit is off (not
+captured). Whether a 3-step or 5-step command during fireplace mode ends it is not known.
 
 ### 5-step screen on the CASA layout
 

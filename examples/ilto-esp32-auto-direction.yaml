@@ -16,9 +16,10 @@
 # round (swap the wires rather than the setting).
 #
 # The tested unit uses the CASA bus layout (see the README), where the panel's 3-step control
-# (Away / Home / Boost), off / on and the clock are known, but the speed and fireplace commands are
-# not. So this file adds the Ventilation mode select, an on/off switch and the unit's clock, and
-# drops the package's speed select and fan speed sensor. On an ILTO-layout unit, leave those out.
+# (Away / Home / Boost), off / on, fireplace mode and the clock are known; speeds 1-5 only with the
+# panel's 5-step screen. So this file adds the Ventilation mode select, on/off and fireplace switches
+# and the unit's clock, and drops the package's speed select and fan speed sensor. On an ILTO-layout
+# unit, leave those out.
 
 substitutions:
   name: ilto-440
@@ -70,6 +71,9 @@ ilto_premium:
   # The unit on / off.
   ventilation:
     name: "Ventilation"
+  # Fireplace mode (the panel's Takkatoiminto); the unit ends it by itself after its set time.
+  fireplace_mode:
+    name: "Fireplace"
   # The unit's own clock (kept in step by the package's Clock sync).
   unit_clock:
     name: "Unit clock"

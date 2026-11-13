@@ -46,7 +46,7 @@ by itself (the log says `Bus layout: ...` once the first frame arrives):
 | Layout | Seen on | Reading | Control (speed, on/off, fireplace, clock) |
 |---|---|---|---|
 | ILTO, long header (`CC 64 4A 00 FD 00 FD ...`, panel is bus master) | ILTO 440 econo | Yes | Yes |
-| CASA, short header (`CC 64 85 FD 0A ...`, unit is bus master) | ILTO 440 Premium (ESP32 + MAX3485) | Yes: temperatures, efficiency, fan power, running, Away / Home / Boost | Away / Home / Boost 30-120 min / Boost (the **Ventilation mode** select), off / on (the **Ventilation** switch), clock sync, and with the panel's 5-step screen (basic display 2) speed 1-5 (the package's **Ventilation** select). Fireplace is not captured yet and is dropped with a warning |
+| CASA, short header (`CC 64 85 FD 0A ...`, unit is bus master) | ILTO 440 Premium (ESP32 + MAX3485) | Yes: temperatures, efficiency, fan power, running, Away / Home / Boost | Away / Home / Boost 30-120 min / Boost (the **Ventilation mode** select), off / on (the **Ventilation** switch), clock sync, and with the panel's 5-step screen (basic display 2) speed 1-5 (the package's **Ventilation** select), fireplace mode (the **Fireplace** switch, and Fireplace in the Ventilation select) |
 
 ## Parts
 
@@ -185,6 +185,7 @@ id(ilto).set_step(2);             // CASA layout: 0 Away, 1 Home, 2-4 Boost 30/6
 | Ventilation mode (`step_mode`) | select | CASA layout only, not in the package (see the ESP32 example): Away, Home, Boost 30 / 60 / 120 min, Boost - the panel's 3-step screen. Shows the unit's choice and sends the panel's command |
 | Boost time left (`boost_time`) | sensor, min | CASA layout only: minutes left of a timed boost, 0 otherwise. The unit reports only the boost's length, so the ESP counts from when the boost started; for a boost already running when the ESP started it is unknown |
 | Ventilation (`ventilation`) | switch | Optional, not in the package: the unit on / off, as the panel's main menu. Used by the ESP32 example for the CASA layout, where the speed select's commands are not known |
+| Fireplace (`fireplace_mode`) | switch | Optional, not in the package: fireplace mode on / off, as the panel's Takkatoiminto / Lopeta. The unit ends it by itself after its set time (10 min by default). On the CASA layout supply 60 %, extract 20 % meanwhile; not sent while the unit is off |
 | Basic display (`basic_display`) | text sensor (diagnostic) | CASA layout only, not in the package: `Basic display 1` (3-step Away / Home / Boost) or `Basic display 2` (speeds 1-5), as the unit reports the panel's screen. Read only: change it on the panel |
 | Unit clock (`unit_clock`) | text sensor (diagnostic) | CASA layout only, not in the package: the unit's own weekday and time, e.g. `Fri 19:23` |
 | Clock sync | switch (config) | On by default: set the unit's clock after boot and at 04:05 daily |
@@ -214,7 +215,7 @@ Two design points worth knowing:
 |---|---|
 | `bytes 0` in the log | No signal: module power (VIN is not 5 V on USB), GND not connected, or A/B not on the middle pair |
 | `bytes` growing, `frames ok 0` | Polarity: flip `ilto_bus_inverted`. If the last bytes look sensible (small numbers like room temperatures) the polarity is right and the unit may use an unknown frame layout: capture whole frames with the snippet below and open an issue |
-| "... is not known on the CASA (short header) bus layout; not sent" | Expected for the speed and fireplace commands on that layout; use the Ventilation mode select and the Ventilation switch |
+| "... is not known on the CASA (short header) bus layout; not sent" | A command whose form was never captured on that layout. "Fan speed needs the panel's 5-step screen": use the Ventilation mode select, or switch the panel to basic display 2 |
 | Board does not boot after wiring | DI on D8 (GPIO15). Use D2 |
 | Commands log "No acknowledgement" | DE/RE not connected to the flow control pin, or DI not wired |
 | Home Assistant cannot connect, log says "Max connections" | Too many log sessions open (the ESP8266 allows 4); close them |
