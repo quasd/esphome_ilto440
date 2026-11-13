@@ -84,10 +84,20 @@
 //   CC 64 45 01 0A 03 A0 00 00 crc crc               unit polls the panel (01)
 //   CC 64 85 0A 01 04 A0 00 00 00 crc crc            panel answers with nothing to report
 //
-// The round repeats about every 0.6 s. How the panel sends a command here was never captured, so
-// on this layout the component only listens: commands are dropped with a warning. Both layouts
-// are tried on every frame and the CRC picks the one that fits; the first good frame fixes the
-// layout for sending.
+// The round repeats about every 0.6 s. The panel, with its 3-step screen, sends its command in
+// place of the empty answer to the poll, and the unit acks it straight away:
+//
+//   CC 64 45 0A 01 0B 20 00 81 <step> 00 00 28 00 00 00 <min> crc crc   panel to unit
+//   CC 64 85 01 0A 06 20 00 81 01 <step> <fan %> crc crc                   unit acks
+//
+//   step 00 Away (fans 20 %), 01 Home (40 %), 02 Boost (60 %); min 1E / 3C / 78 = 30 / 60 / 120 min,
+//   00 = no time limit. Stepping through the panel's list sends every step it passes.
+//
+// The status (0x73) then carries the choice in p[14] (00 / 01 / 02), the boost minutes in p[5],
+// and p[19] = 0x20 during a timed boost. The component sends the same command, as the panel (01),
+// in the pause after the panel's empty answer. Only this command is known on this layout; the
+// others (speed 1-5, off, fireplace, clock) are dropped with a warning. Both layouts are tried on
+// every frame and the CRC picks the one that fits; the first good frame fixes the layout for sending.
 
 namespace esphome::ilto_premium {
 
@@ -116,6 +126,13 @@ class IltoModeSelect : public select::Select, public Parented<IltoPremium> {
   void control(size_t index) override;
 };
 
+// The panel's 3-step control on the CASA layout: Away, Home, Boost 30 / 60 / 120 min, Boost (no time
+// limit), in that order. Built like IltoModeSelect: no setup, nothing sent at boot.
+class IltoStepSelect : public select::Select, public Parented<IltoPremium> {
+ protected:
+  void control(size_t index) override;
+};
+
 class IltoPremium : public Component, public uart::UARTDevice {
  public:
   SUB_SENSOR(temperature_1)
@@ -140,9 +157,31 @@ class IltoPremium : public Component, public uart::UARTDevice {
   void set_ventilation_switch(IltoSwitch *s) { this->ventilation_switch_ = s; }
   void set_fireplace_mode_switch(IltoSwitch *s) { this->fireplace_mode_switch_ = s; }
   void set_mode_select(IltoModeSelect *s) { this->mode_select_ = s; }
+  void set_step_select(IltoStepSelect *s) { this->step_select_ = s; }
+  SUB_SENSOR(boost_time)
 
   static constexpr size_t MODE_OFF = 0;  // 1-5 are the fan speeds
   static constexpr size_t MODE_FIREPLACE = 6;
+
+  // IltoStepSelect's options: the panel's step byte and boost minutes for each.
+  static constexpr size_t STEP_COUNT = 6;
+  static constexpr uint8_t STEP_CODE[STEP_COUNT] = {0x00, 0x01, 0x02, 0x02, 0x02, 0x02};
+  static constexpr uint8_t STEP_MINUTES[STEP_COUNT] = {0, 0, 30, 60, 120, 0};
+
+  // Away / Home / Boost on the CASA layout, sent as the panel's last-seen 20 00 81 command with only
+  // the step and minutes changed. Nothing is sent when the unit already reports that choice.
+  void set_step(size_t index) {
+    if (index >= STEP_COUNT)
+      return;
+    if (index == this->published_step_ && !this->command_waiting_(0x20, 0x81)) {
+      ESP_LOGD(TAG, "Already in that mode, nothing sent");
+      return;
+    }
+    std::vector<uint8_t> data = this->step_command_;
+    data[3] = STEP_CODE[index];
+    data[10] = STEP_MINUTES[index];
+    this->queue_(std::move(data));
+  }
 
   // Brings the unit to Off, speed 1-5 or Fireplace with the fewest commands: switches it on first
   // if needed, and ends fireplace mode before a speed is set (whether a speed command alone ends
@@ -231,13 +270,19 @@ class IltoPremium : public Component, public uart::UARTDevice {
       this->feed_(b);
     }
     // Commands queued before the first good frame (e.g. the clock sync at boot) wait until the
-    // layout is known; on a layout this cannot send on they are dropped.
-    if (this->layout_ != LAYOUT_ILTO && this->layout_ != LAYOUT_UNKNOWN && !this->commands_.empty()) {
-      ESP_LOGW(TAG, "Sending is not supported on the %s bus layout yet; %u command(s) dropped",
-               layout_name_(this->layout_), (unsigned) this->commands_.size());
-      this->commands_.clear();
+    // layout is known; those the layout has no known form for are then dropped.
+    if (this->layout_ != LAYOUT_UNKNOWN) {
+      for (auto it = this->commands_.begin(); it != this->commands_.end();) {
+        if (supported_(this->layout_, *it)) {
+          ++it;
+        } else {
+          ESP_LOGW(TAG, "%s is not known on the %s bus layout; not sent", format_hex_pretty(*it).c_str(),
+                   layout_name_(this->layout_));
+          it = this->commands_.erase(it);
+        }
+      }
     }
-    if (this->layout_ == LAYOUT_ILTO && this->pending_.empty() && !this->commands_.empty()) {
+    if (this->layout_ != LAYOUT_UNKNOWN && this->pending_.empty() && !this->commands_.empty()) {
       this->pending_ = std::move(this->commands_.front());
       this->commands_.pop_front();
       this->attempts_ = 0;
@@ -251,7 +296,7 @@ class IltoPremium : public Component, public uart::UARTDevice {
           this->pending_.clear();
         }
       }
-      if (!this->pending_.empty() && !this->awaiting_ack_ && now - this->last_rx_ >= QUIET_MS)
+      if (!this->pending_.empty() && !this->awaiting_ack_ && this->may_send_(now))
         this->send_pending_();
     }
     // Wiring check: is anything arriving, and does it frame up?
@@ -283,6 +328,9 @@ class IltoPremium : public Component, public uart::UARTDevice {
   static constexpr uint8_t MAX_LEN = 30;        // swegongw's limit for the len byte
   static constexpr size_t MAX_SEEN = 48;   // distinct header + type remembered for logging
   static constexpr uint32_t QUIET_MS = 30;         // bus idle this long before sending
+  // CASA: send between 5 and 70 ms after the panel's empty answer (the next frame starts ~100 ms in).
+  static constexpr uint32_t CASA_SLOT_QUIET_MS = 5;
+  static constexpr uint32_t CASA_SLOT_END_MS = 70;
   static constexpr uint32_t ACK_TIMEOUT_MS = 500;  // resend after this without an ack
   static constexpr uint8_t MAX_ATTEMPTS = 3;
 
@@ -303,6 +351,15 @@ class IltoPremium : public Component, public uart::UARTDevice {
   uart::UARTComponent *tx_uart_{nullptr};
   // The panel's speed command as seen on the bus (here at speed 1); updated from the panel.
   std::vector<uint8_t> speed_command_{0x20, 0x00, 0x0C, 0x01, 0x00, 0x01, 0x14, 0x01, 0x01, 0x00};
+  // CASA: the panel's 3-step command as captured (here Home); updated from the panel.
+  std::vector<uint8_t> step_command_{0x20, 0x00, 0x81, 0x01, 0x00, 0x00, 0x28, 0x00, 0x00, 0x00, 0x00};
+  bool casa_slot_open_{false};
+  uint32_t casa_slot_at_{0};
+  IltoStepSelect *step_select_{nullptr};
+  size_t published_step_{SIZE_MAX};
+  // Boost minutes of the last 3-step command seen on the bus (the panel's or ours), to tell the
+  // timed boosts apart in the select; 0 while unknown.
+  uint8_t boost_minutes_{0};
   std::deque<std::vector<uint8_t>> commands_;  // commands (type onwards) not sent yet
   std::vector<uint8_t> pending_;               // the command being sent, until the unit acks it
   bool awaiting_ack_{false};
@@ -340,9 +397,9 @@ class IltoPremium : public Component, public uart::UARTDevice {
       ESP_LOGW(TAG, "Cannot send without flow_control_pin");
       return;
     }
-    if (this->layout_ != LAYOUT_ILTO && this->layout_ != LAYOUT_UNKNOWN) {
-      ESP_LOGW(TAG, "Sending is not supported on the %s bus layout yet; %s not sent",
-               layout_name_(this->layout_), format_hex_pretty(data).c_str());
+    if (this->layout_ != LAYOUT_UNKNOWN && !supported_(this->layout_, data)) {
+      ESP_LOGW(TAG, "%s is not known on the %s bus layout; not sent", format_hex_pretty(data).c_str(),
+               layout_name_(this->layout_));
       return;
     }
     // A newer command of the same kind replaces one still waiting (e.g. several speed steps).
@@ -355,15 +412,54 @@ class IltoPremium : public Component, public uart::UARTDevice {
     this->commands_.push_back(std::move(data));
   }
 
+  // Which commands have a known form on each layout: on CASA only the 3-step command (20 00 81),
+  // which in turn is not known on ILTO.
+  static bool supported_(Layout layout, const std::vector<uint8_t> &data) {
+    const bool step = data.size() > 2 && data[0] == 0x20 && data[2] == 0x81;
+    return layout == LAYOUT_CASA ? step : !step;
+  }
+
+  // ILTO: the panel polls and the bus is idle for about a second between polls, so any pause will
+  // do. CASA: the unit polls the panel and the panel puts its command in its answer; the only quiet
+  // spot known is the ~100 ms after the panel's empty answer, before the unit's next broadcast, so
+  // send there - after the bus has been idle a moment, and well before the window closes.
+  bool may_send_(uint32_t now) const {
+    if (this->layout_ == LAYOUT_ILTO)
+      return now - this->last_rx_ >= QUIET_MS;
+    if (this->layout_ == LAYOUT_CASA)
+      return this->casa_slot_open_ && now - this->last_rx_ >= CASA_SLOT_QUIET_MS &&
+             now - this->casa_slot_at_ < CASA_SLOT_END_MS;
+    return false;
+  }
+
   void send_pending_() {
+    std::vector<uint8_t> out;
+    if (this->layout_ == LAYOUT_CASA) {
+      // As the panel sends it: request flags 45, to the unit (0A), from the panel (01). No length
+      // byte before CC on this layout.
+      std::vector<uint8_t> body{0x64, 0x45, 0x0A, 0x01, uint8_t(this->pending_.size())};
+      body.insert(body.end(), this->pending_.begin(), this->pending_.end());
+      const uint16_t crc = crc16_ccitt_(body.data(), body.size());
+      out.push_back(0xCC);
+      out.insert(out.end(), body.begin(), body.end());
+      out.push_back(crc >> 8);
+      out.push_back(crc & 0xFF);
+      this->casa_slot_open_ = false;  // one try per window
+      this->transmit_(out);
+      return;
+    }
     std::vector<uint8_t> body{0x64, 0x4A, 0x00, 0xFD, 0x00, 0xFD, uint8_t(this->pending_.size())};
     body.insert(body.end(), this->pending_.begin(), this->pending_.end());
     const uint16_t crc = crc16_ccitt_(body.data(), body.size());
-    std::vector<uint8_t> out{uint8_t(1 + body.size() + 2), 0xCC};
+    out.push_back(uint8_t(1 + body.size() + 2));
+    out.push_back(0xCC);
     out.insert(out.end(), body.begin(), body.end());
     out.push_back(crc >> 8);
     out.push_back(crc & 0xFF);
+    this->transmit_(out);
+  }
 
+  void transmit_(const std::vector<uint8_t> &out) {
     uart::UARTComponent *tx = this->tx_uart_ != nullptr ? this->tx_uart_ : this->parent_;
     this->flow_control_pin_->digital_write(true);
     tx->write_array(out);
@@ -384,7 +480,7 @@ class IltoPremium : public Component, public uart::UARTDevice {
       case LAYOUT_ILTO:
         return "ILTO (long header)";
       case LAYOUT_CASA:
-        return "CASA (short header, listen only)";
+        return "CASA (short header)";
       default:
         return "not seen yet";
     }
@@ -506,6 +602,28 @@ class IltoPremium : public Component, public uart::UARTDevice {
       if (this->buf_[1] == 0x4A && type == 0x20 && this->buf_[9] == 0x0C && n + 3 == this->speed_command_.size())
         this->speed_command_.assign(this->buf_ + 7, this->buf_ + 7 + n + 3);
     }
+    if (layout == LAYOUT_CASA) {
+      const uint8_t dst = this->buf_[2], src = this->buf_[3], select = this->buf_[7];
+      // The panel's empty answer to the unit's poll opens the window to send in.
+      if (src == 0x01 && dst == 0x0A && type == 0xA0) {
+        this->casa_slot_open_ = true;
+        this->casa_slot_at_ = millis();
+      }
+      // The panel's 3-step command: 20 00 81 <step> ... <minutes>. (Our own frames are not heard:
+      // the transceiver's receiver is off while it sends.)
+      if (src == 0x01 && dst == 0x0A && type == 0x20 && select == 0x81 && n + 3 == this->step_command_.size()) {
+        this->step_command_.assign(this->buf_ + 5, this->buf_ + 5 + n + 3);
+        this->boost_minutes_ = this->step_command_[3] == 0x02 ? this->step_command_[10] : 0;
+      }
+      // The unit's ack to the panel: 20 00 81 01 <step> <fan %>.
+      if (this->awaiting_ack_ && src == 0x0A && dst == 0x01 && type == this->pending_[0] && select == this->pending_[2] &&
+          n >= 2 && p[1] == this->pending_[3]) {
+        ESP_LOGI(TAG, "Unit acknowledged %s", format_hex_pretty(this->pending_).c_str());
+        this->boost_minutes_ = this->pending_[3] == 0x02 ? this->pending_[10] : 0;
+        this->pending_.clear();
+        this->awaiting_ack_ = false;
+      }
+    }
 
     switch (type) {
       case 0x21:
@@ -539,20 +657,46 @@ class IltoPremium : public Component, public uart::UARTDevice {
           // p[4] & 0x20: the panel shows the 3-step Away / Home / Boost screen, and p[17] is then not
           // the speed the fans run at, so the speed is reported as unknown.
           const bool three_step = p[4] & 0x20;
+          // Bit 0 of p[19] is "switched off" (the ILTO's p[19] was 1); the CASA unit sets 0x20 there
+          // during a timed boost.
+          const bool off = p[19] & 0x01;
           publish_(this->supply_fan_power_sensor_, p[12]);
           publish_(this->extract_fan_power_sensor_, p[13]);
           // The selected speed while running, 0 while switched off.
-          publish_(this->fan_speed_sensor_, p[19] ? 0.0f : three_step ? NAN : float(p[17] / 20));
-          publish_(this->running_binary_sensor_, p[19] == 0);
+          publish_(this->fan_speed_sensor_, off ? 0.0f : three_step ? NAN : float(p[17] / 20));
+          publish_(this->running_binary_sensor_, !off);
           if (this->ventilation_switch_ != nullptr)
-            this->ventilation_switch_->publish_state(p[19] == 0);
+            this->ventilation_switch_->publish_state(!off);
           this->reported_speed_ = (p[4] & 0x20) ? 0 : p[17] / 20;
           // Keep the expected state while a power / fireplace command is still waiting to be sent.
           if (!this->command_waiting_(0x20, 0x10) && !this->command_waiting_(0x20, 0x20))
-            this->running_ = p[19] == 0;
+            this->running_ = !off;
           if (!this->command_waiting_(0x30))
             this->fireplace_ = p[1] & 0x01;
-          const size_t mode = p[19]            ? MODE_OFF
+          // CASA: p[14] is the 3-step choice (00 Away, 01 Home, 02 Boost), p[5] the boost minutes
+          // and p[19] & 0x20 a boost with a time limit (all as captured; whether p[5] counts down
+          // was not watched long enough to tell).
+          if (layout == LAYOUT_CASA && !off) {
+            const bool timed = p[19] & 0x20;
+            publish_(this->boost_time_sensor_, p[14] == 0x02 && timed ? float(p[5]) : 0.0f);
+            size_t step = SIZE_MAX;
+            if (p[14] == 0x00 || p[14] == 0x01) {
+              step = p[14];
+            } else if (p[14] == 0x02 && !timed) {
+              step = 5;
+            } else if (p[14] == 0x02) {
+              // The duration chosen last, if a 3-step command has been seen; otherwise the shortest
+              // option that covers the minutes the unit reports.
+              const uint8_t minutes = this->boost_minutes_ != 0 ? this->boost_minutes_ : p[5];
+              step = minutes <= 30 ? 2 : minutes <= 60 ? 3 : 4;
+            }
+            if (this->step_select_ != nullptr && step != SIZE_MAX && step != this->published_step_ &&
+                !this->command_waiting_(0x20, 0x81)) {
+              this->published_step_ = step;
+              this->step_select_->publish_state(step);
+            }
+          }
+          const size_t mode = off              ? MODE_OFF
                               : (p[1] & 0x01) ? MODE_FIREPLACE
                                               : size_t(clamp(p[17] / 20, 1, 5));
           // With the 3-step screen a speed mode is not known; show nothing rather than a wrong speed.
@@ -594,6 +738,7 @@ class IltoPremium : public Component, public uart::UARTDevice {
 // The select and switches keep their old state until the unit's next status shows the change
 // (about 2 s).
 inline void IltoModeSelect::control(size_t index) { this->parent_->set_mode(index); }
+inline void IltoStepSelect::control(size_t index) { this->parent_->set_step(index); }
 
 inline void IltoSwitch::write_state(bool state) {
   if (this->kind_ == POWER)

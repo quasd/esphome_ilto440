@@ -15,8 +15,10 @@
 # ilto_bus_inverted stays "false", and polarity is fixed by connecting A and B the right way
 # round (swap the wires rather than the setting).
 #
-# On the CASA layout the component only listens. Turn the "Clock sync" switch off in Home
-# Assistant to stop the warning each boot.
+# The tested unit uses the CASA bus layout (see the README), where the panel's 3-step control
+# (Away / Home / Boost) is known but the speed, power, fireplace and clock commands are not. So
+# this file adds the Ventilation mode select, drops the package's Ventilation (speed) select, and
+# keeps the clock sync off. On an ILTO-layout unit, leave those three changes out.
 
 substitutions:
   name: ilto-440
@@ -57,10 +59,24 @@ logger:
 packages:
   ilto: github://quasd/esphome_ilto440/packages/ilto_premium.yaml@main
 
-# Sensors this unit does not have (the panel shows 0, or 110-111 for a temperature):
 ilto_premium:
+  # CASA layout: Away / Home / Boost, and the boost minutes.
+  step_mode:
+    name: "Ventilation mode"
+  boost_time:
+    name: "Boost time"
+    filters:
+      - delta: 0.5
+  # The speed select's commands are not known on the CASA layout.
+  mode: !remove
+  # Sensors this unit does not have (the panel shows 0, or 110-111 for a temperature):
   temperature_7: !remove
   co2: !remove
   humidity: !remove
   supply_fan_rpm: !remove
   extract_fan_rpm: !remove
+
+# The clock command is not known on the CASA layout: keep the clock sync off.
+switch:
+  - id: !extend ilto_clock_sync
+    restore_mode: ALWAYS_OFF

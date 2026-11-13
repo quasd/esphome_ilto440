@@ -4,7 +4,7 @@ What is known about the bus between an ILTO (Swegon CASA) ventilation unit and i
 control panel, reverse-engineered on an ILTO 440 econo with a Premium panel from 2008 by sniffing
 the bus while changing settings on the panel. Other units and panel versions may differ: a second
 unit used a different frame header with the unit as bus master (see
-[Second bus layout](#second-bus-layout-casa-short-header-listen-only)). The component recognises
+[Second bus layout](#second-bus-layout-casa-short-header)). The component recognises
 both layouts by their CRC.
 
 Starting points were openHAB 1's `swegonventilation` binding (`swegongw.c`,
@@ -135,7 +135,7 @@ Checked against the panel's service screens on the tested unit.
 openHAB also documents a type 0x21 (operating mode, unit state, fan speed); the tested unit never
 sent it.
 
-## Second bus layout: CASA short header (listen only)
+## Second bus layout: CASA short header
 
 Captured on a second unit, an ILTO 440 Premium, read through an ESP32 and a MAX3485 module.
 The physical layer is the same (38400 8N1, same idle voltages on the middle pair), and so are the
@@ -177,17 +177,48 @@ Payloads, checked on that unit against its panel's sensor screens:
   17, 110, 20 °C in the capture; an unconnected sensor read 110, not 111). p[12] was 40 with
   sensors 1-3 at 9 / 13 / 19 °C, exactly (13 - 9) / (19 - 9), so on this unit sensor 1 is outdoor,
   2 supply after the heat exchanger and 3 extract, as openHAB names them. p[13]..p[15] were 0.
-- **0x73**: 21 data bytes, `C1 00 14 00 21 00 0A 00 00 00 3C 00 28 28 01 00 00 00 00 00 07` while
-  running. p[12] / p[13] 40 / 40 (fan power %), p[19] 0 and p[20] 07 (running) fit the ILTO
-  meanings. p[4] = 0x21 is the 3-step display's value on the ILTO, and p[16] / p[17] were 0 rather
-  than 0x10 / speed; whether p[17] carries the speed with the 5-step display was not checked.
+- **0x73**: 21 data bytes, `C1 00 14 00 21 1E 0A 00 00 00 4A 00 3C 3C 02 00 00 00 00 20 07` during
+  a 30 min boost. p[12] / p[13] fan power % and p[20] 07 (running) fit the ILTO meanings. p[4] =
+  0x21 is the 3-step display's value on the ILTO, and p[16] / p[17] were 0 rather than 0x10 / speed;
+  whether p[17] carries the speed with the 5-step display was not checked. New here:
 
-**Sending is not supported on this layout.** The panel is polled by the unit rather than sending
-when it likes, so a command presumably goes in the panel's answer, or a third device has to be
-given its own address (the type AA frame may be that offer). Until the panel's command frames are
-captured here, the component drops every command on this layout with a warning, including the
-clock sync. To capture them, change one thing on the panel at a time with the UART debug logger
-running (see the README's troubleshooting section) and compare the panel's answers to the polls.
+  | Byte | Meaning |
+  |---|---|
+  | p[5] | Boost minutes: 1E / 3C / 78 during a 30 / 60 / 120 min boost, 0 otherwise. Whether it counts down was not watched long enough to tell |
+  | p[10] | Wanders between 0x40 and 0x59 whatever the mode (unknown) |
+  | p[14] | The 3-step choice: 00 Away, 01 Home, 02 Boost |
+  | p[19] | 0x20 during a timed boost, 00 otherwise (also with a boost without a time limit). On the ILTO p[19] = 1 meant switched off, so only bit 0 is read as "off" |
+
+### Commands on the CASA layout
+
+Captured with the panel's 3-step screen (Away / Home / Boost 30 min / 60 min / 120 min / Boost),
+going through each choice from Home and back. The panel does not wait for a pause: it sends its
+command **in place of its empty answer** to the unit's poll, and the unit acks within ~20 ms:
+
+```
+CC 64 45 01 0A 03 A0 00 00 32 EE                                    unit polls the panel
+CC 64 45 0A 01 0B 20 00 81 <step> 00 00 28 00 00 00 <min> crc crc   panel: 3-step command
+CC 64 85 01 0A 06 20 00 81 01 <step> <fan %> crc crc                unit acks to the panel
+```
+
+| Choice | `<step>` | `<min>` | Ack `<fan %>` (this unit) |
+|---|---|---|---|
+| Away | 00 | 00 | 14 (20 %) |
+| Home | 01 | 00 | 28 (40 %) |
+| Boost 30 / 60 / 120 min | 02 | 1E / 3C / 78 | 3C (60 %) |
+| Boost (no time limit) | 02 | 00 | 3C |
+
+The panel sends one command for every choice it passes on its list: Boost 120 min from Home sent
+30, 60 and 120 min in turn, each acked. The `28` byte was the same in every frame (meaning
+unknown; the component keeps the panel's last-seen frame and changes only `<step>` and `<min>`).
+
+The component sends the same frame, with the panel's address, **in the pause right after the
+panel's empty answer** (`CC 64 85 0A 01 04 A0 00 00 00`): the next frame starts ~100 ms later, and
+the 18 bytes take under 5 ms. It sends 5-70 ms after that answer, at most once per round, and tries
+three rounds before giving up. Whether the unit takes a command outside the panel's answer slot
+was not known when this was written; the ack in the log ("Unit acknowledged ...") tells. Not
+captured yet on this layout: speed 1-5 with the 5-step screen, off/on, fireplace, clock; those
+commands are dropped with a warning.
 
 ## Settings not decoded, on purpose
 

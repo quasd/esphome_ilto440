@@ -42,11 +42,17 @@ protocol knowledge or the entities change.
   type <00|01> A0 data crc`, no `<n>` prefix, same CRC and 0x71 / 0x73 payloads (0x71 has 16 data
   bytes there). The unit (0A) is the bus master: it broadcasts (FD) 0x73, 0x71 and one rotating type
   per ~0.6 s round and polls the panel (01), which answers `A0 00 00 00`. `feed_()` tries both
-  layouts on every frame and the CRC decides; the first good frame sets `layout_`. **Nothing is sent
-  on the CASA layout** - commands are dropped with a warning (queued ones too) because the panel's
-  commands there were never captured, and an ILTO-layout frame sent onto that bus only collided
-  with the unit's traffic. To add control: capture the panel's answer to the poll while changing one
-  setting at a time, and only then allow sending for that layout.
+  layouts on every frame and the CRC decides; the first good frame sets `layout_`.
+- **CASA commands**: the panel sends `45 0A 01 ... 20 00 81 <step> 00 00 28 00 00 00 <min>` in place
+  of its empty answer to the poll; the unit acks `85 01 0A ... 20 00 81 01 <step> <fan %>`. Step 00
+  Away, 01 Home, 02 Boost; min 1E/3C/78 or 00 (no limit). Status 0x73: p[14] step, p[5] minutes,
+  p[19] 0x20 during a timed boost (so "off" is `p[19] & 0x01` only). The component sends as the
+  panel (01) 5-70 ms after the panel's empty answer (`casa_slot_*`), once per round, 3 tries.
+  `supported_()` says which commands have a known form per layout; anything else is dropped with a
+  warning, queued ones too. An ILTO-layout frame sent onto the CASA bus only collided with the
+  unit's traffic - never send a frame whose form was not captured on that layout. To add a command:
+  capture it with the filtered `uart_debug` lambda (panel frames only), step by step, from a known
+  state and back.
 - **Service and installation settings are left out on purpose** (owner's decision): weekly timer,
   filter guard, summer cooling, heating, actuators, fan speed per mode and the rest of the
   installer menus. A wrong value can stop a unit from working, so they stay on the panel. Don't

@@ -15,6 +15,7 @@ from esphome.const import (
     ENTITY_CATEGORY_DIAGNOSTIC,
     STATE_CLASS_MEASUREMENT,
     UNIT_CELSIUS,
+    UNIT_MINUTE,
     UNIT_PARTS_PER_MILLION,
     UNIT_PERCENT,
     UNIT_REVOLUTIONS_PER_MINUTE,
@@ -32,6 +33,11 @@ IltoModeSelect = ilto_premium_ns.class_(
 )
 # The order is the C++ side's mode numbers: Off = 0, speeds 1-5, Fireplace = 6.
 MODE_OPTIONS = ["Off", "1", "2", "3", "4", "5", "Fireplace"]
+IltoStepSelect = ilto_premium_ns.class_(
+    "IltoStepSelect", select.Select, cg.Parented.template(IltoPremium)
+)
+# The panel's 3-step choices on the CASA bus layout, in the C++ side's order (STEP_CODE / STEP_MINUTES).
+STEP_OPTIONS = ["Away", "Home", "Boost 30 min", "Boost 60 min", "Boost 120 min", "Boost"]
 
 
 def _no_restore(config):
@@ -90,6 +96,15 @@ SCHEMA = {
 }
 # One control for off / speed 1-5 / fireplace.
 SCHEMA[cv.Optional("mode")] = select.select_schema(IltoModeSelect, icon="mdi:fan")
+# Away / Home / Boost, as the panel's 3-step screen (CASA bus layout only).
+SCHEMA[cv.Optional("step_mode")] = select.select_schema(IltoStepSelect, icon="mdi:home-switch")
+# Minutes of a timed boost as the unit reports them (CASA bus layout), 0 otherwise.
+SCHEMA[cv.Optional("boost_time")] = sensor.sensor_schema(
+    unit_of_measurement=UNIT_MINUTE,
+    accuracy_decimals=0,
+    state_class=STATE_CLASS_MEASUREMENT,
+    icon="mdi:timer-outline",
+)
 for key, (_, icon) in SWITCHES.items():
     SCHEMA[cv.Optional(key)] = cv.All(
         switch.switch_schema(IltoSwitch, icon=icon, default_restore_mode="DISABLED"), _no_restore
@@ -148,7 +163,7 @@ async def to_code(config):
         tx_uart = await cg.get_variable(config["tx_uart_id"])
         cg.add(var.set_tx_uart(tx_uart))
 
-    for key in ["efficiency", "co2", "humidity", "fan_speed", *TEMPERATURES, *FAN_RPMS, *FAN_POWERS, *RAW_CODES]:
+    for key in ["efficiency", "co2", "humidity", "fan_speed", "boost_time", *TEMPERATURES, *FAN_RPMS, *FAN_POWERS, *RAW_CODES]:
         if key in config:
             sens = await sensor.new_sensor(config[key])
             cg.add(getattr(var, f"set_{key}_sensor")(sens))
@@ -156,6 +171,10 @@ async def to_code(config):
         sel = await select.new_select(config["mode"], options=MODE_OPTIONS)
         await cg.register_parented(sel, var)
         cg.add(var.set_mode_select(sel))
+    if "step_mode" in config:
+        sel = await select.new_select(config["step_mode"], options=STEP_OPTIONS)
+        await cg.register_parented(sel, var)
+        cg.add(var.set_step_select(sel))
     for key, (kind, _) in SWITCHES.items():
         if key in config:
             sw = await switch.new_switch(config[key])
