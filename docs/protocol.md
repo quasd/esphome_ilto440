@@ -2,7 +2,10 @@
 
 What is known about the bus between an ILTO (Swegon CASA) ventilation unit and its Premium
 control panel, reverse-engineered on an ILTO 440 econo with a Premium panel from 2008 by sniffing
-the bus while changing settings on the panel. Other units and panel versions may differ.
+the bus while changing settings on the panel. Other units and panel versions may differ: a second
+unit used a different frame header with the unit as bus master (see
+[Second bus layout](#second-bus-layout-casa-short-header-listen-only)). The component recognises
+both layouts by their CRC.
 
 Starting points were openHAB 1's `swegonventilation` binding (`swegongw.c`,
 `SwegonVentilationDataParser.java`), which only reads the bus, and the unit's installation
@@ -131,6 +134,60 @@ Checked against the panel's service screens on the tested unit.
 
 openHAB also documents a type 0x21 (operating mode, unit state, fan speed); the tested unit never
 sent it.
+
+## Second bus layout: CASA short header (listen only)
+
+Captured on a second unit, an ILTO 440 Premium, read through an ESP32 and a MAX3485 module.
+The physical layer is the same (38400 8N1, same idle voltages on the middle pair), and so are the
+`CC 64` start, the CRC and the 0x71 / 0x73 payloads. What differs is the header, and who runs
+the bus: **here the unit is the master**.
+
+```
+CC 64 <flags> <dst> <src> LEN type <00|01> A0 data... crc_hi crc_lo
+```
+
+| Field | Meaning |
+|---|---|
+| `flags` | 85 on data frames and answers, 45 on polls (guessed from the traffic; not decoded) |
+| `dst`, `src` | Addresses. Unit **0A**, panel **01**, FD = everyone |
+| `LEN` | Bytes from `type` to the end of the data, as in the ILTO layout |
+| `<00\|01> A0` | Where the ILTO layout has `00 FF`. The first byte flips between 00 and 01 for the same type; meaning unknown |
+| `crc` | The same CRC16-CCITT, over `64` .. the last data byte |
+
+There is no length byte before `CC`. 226 of 227 captured frames passed the CRC; the one that
+failed was hit by a frame sent in the ILTO layout at the same moment.
+
+One round, repeated about every 0.6 s:
+
+```
+CC 64 85 FD 0A 18 73 00 A0 <21 data bytes> crc crc     unit to all: status (0x73)
+CC 64 85 FD 0A 13 71 00 A0 <16 data bytes> crc crc     unit to all: temperatures (0x71)
+CC 64 85 FD 0A LEN <t> <00|01> A0 ... crc crc          unit to all: one other type per round
+CC 64 45 FD 0A 05 AA 00 00 02 0A crc crc               unit to all: unknown (looking for device 02?)
+CC 64 45 01 0A 03 A0 00 00 crc crc                     unit polls the panel
+CC 64 85 0A 01 04 A0 00 00 00 crc crc                  panel answers: nothing to report
+```
+
+The "other type" rotates through about 35 values (0x21-0x3D, 0x45-0x55, 0x61-0x6F, 0x79, 0x81-0x89,
+0x97), so the unit appears to broadcast its whole configuration over ~20 s. None of them is decoded.
+
+Payloads, checked on that unit against its panel's sensor screens:
+
+- **0x71**: 16 data bytes. p[0]..p[7] are sensors 1-8 as in the table above (9, 13, 19, 17, 14,
+  17, 110, 20 °C in the capture; an unconnected sensor read 110, not 111). p[12] was 40 with
+  sensors 1-3 at 9 / 13 / 19 °C, exactly (13 - 9) / (19 - 9), so on this unit sensor 1 is outdoor,
+  2 supply after the heat exchanger and 3 extract, as openHAB names them. p[13]..p[15] were 0.
+- **0x73**: 21 data bytes, `C1 00 14 00 21 00 0A 00 00 00 3C 00 28 28 01 00 00 00 00 00 07` while
+  running. p[12] / p[13] 40 / 40 (fan power %), p[19] 0 and p[20] 07 (running) fit the ILTO
+  meanings. p[4] = 0x21 is the 3-step display's value on the ILTO, and p[16] / p[17] were 0 rather
+  than 0x10 / speed; whether p[17] carries the speed with the 5-step display was not checked.
+
+**Sending is not supported on this layout.** The panel is polled by the unit rather than sending
+when it likes, so a command presumably goes in the panel's answer, or a third device has to be
+given its own address (the type AA frame may be that offer). Until the panel's command frames are
+captured here, the component drops every command on this layout with a warning, including the
+clock sync. To capture them, change one thing on the panel at a time with the UART debug logger
+running (see the README's troubleshooting section) and compare the panel's answers to the polls.
 
 ## Settings not decoded, on purpose
 

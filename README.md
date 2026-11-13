@@ -40,6 +40,14 @@ Tested: ILTO 440 econo, Premium panel (2008, 4P4C sockets). The bus protocol is 
 CASA units use (see [docs/protocol.md](docs/protocol.md)), so other ILTO / Swegon CASA models with
 the Premium panel are likely to work, possibly with a different set of sensors.
 
+Units differ in the frame header. Two layouts are known, and the component recognises either one
+by itself (the log says `Bus layout: ...` once the first frame arrives):
+
+| Layout | Seen on | Reading | Control (speed, on/off, fireplace, clock) |
+|---|---|---|---|
+| ILTO, long header (`CC 64 4A 00 FD 00 FD ...`, panel is bus master) | ILTO 440 econo | Yes | Yes |
+| CASA, short header (`CC 64 85 FD 0A ...`, unit is bus master) | ILTO 440 Premium (ESP32 + MAX3485) | Yes: temperatures, efficiency, fan power, running | **Not yet**: commands are dropped with a warning until the panel's commands on this layout are captured |
+
 ## Parts
 
 - ESP8266 board: tested on a LoLin NodeMCU v3
@@ -96,7 +104,9 @@ Pin notes (why not other pins):
    ```
 
    - `frames ok` growing and `bad crc 0`: all good.
-   - `bytes` growing but `frames ok 0`: flip `ilto_bus_inverted`.
+   - `bytes` growing but `frames ok 0`: flip `ilto_bus_inverted` (with an automatic-direction
+     module, swap A and B instead; see the ESP32 example). If that does not help, see
+     Troubleshooting for capturing the raw frames.
    - `bytes 0`: no signal - check the module's power, GND and the A/B wires.
 5. Add the device in Home Assistant. Check the temperatures against the panel's sensor screens
    (service menu), then try the fan speed.
@@ -148,6 +158,7 @@ ilto_premium:
 |---|---|
 | [examples/ilto-minimal.yaml](examples/ilto-minimal.yaml) | The tested unit's configuration: the package plus `!remove` |
 | [examples/ilto-custom-pins.yaml](examples/ilto-custom-pins.yaml) | The same with DI and DE/RE on other pins |
+| [examples/ilto-esp32-auto-direction.yaml](examples/ilto-esp32-auto-direction.yaml) | ESP32 with a 3.3 V RS-485 module that switches direction by itself (MAX3485 boards without DE/RE pins): no resistors, `ilto_bus_inverted: "false"`, A/B the right way round |
 
 From your own ESPHome lambdas the component offers:
 
@@ -165,7 +176,7 @@ id(ilto).set_clock(weekday, hour, minute, second);  // weekday: Monday = 0
 |---|---|---|
 | Sensor 1-8 temperature | sensor, °C | Numbered as on the panel. Which duct each measures depends on the unit. The unit sends whole degrees; the 15 s average shows one decimal, which tells roughly where between two whole degrees the reading sits |
 | Heat recovery efficiency | sensor, % | |
-| Fan speed | sensor | Selected speed 1-5, 0 while the unit is off |
+| Fan speed | sensor | Selected speed 1-5, 0 while the unit is off. Unknown while the panel shows the 3-step Away / Home / Boost screen, which does not report the speed |
 | Supply fan power, Extract fan power | sensor, % | 0 when the unit is off |
 | CO2, Humidity | sensor | Only with those options; scale unchecked |
 | Supply fan rpm, Extract fan rpm | sensor | Not reported by econo models |
@@ -196,11 +207,27 @@ Two design points worth knowing:
 | Symptom | Cause |
 |---|---|
 | `bytes 0` in the log | No signal: module power (VIN is not 5 V on USB), GND not connected, or A/B not on the middle pair |
-| `bytes` growing, `frames ok 0` | Polarity: flip `ilto_bus_inverted` |
+| `bytes` growing, `frames ok 0` | Polarity: flip `ilto_bus_inverted`. If the last bytes look sensible (small numbers like room temperatures) the polarity is right and the unit may use an unknown frame layout: capture whole frames with the snippet below and open an issue |
+| "Sending is not supported on the CASA ... bus layout" | Expected on that layout: reading works, control is not decoded yet (turn Clock sync off to silence it) |
 | Board does not boot after wiring | DI on D8 (GPIO15). Use D2 |
 | Commands log "No acknowledgement" | DE/RE not connected to the flow control pin, or DI not wired |
 | Home Assistant cannot connect, log says "Max connections" | Too many log sessions open (the ESP8266 allows 4); close them |
 | Temperatures look wrong | Compare with the panel's sensor screens; sensor numbers differ between units |
+
+To see every frame on its own log line (frames are separated by short pauses), add this to the
+device file and look for `uart_debug` lines:
+
+```yaml
+uart:
+  - id: !extend ilto_bus_rx
+    debug:
+      direction: RX
+      dummy_receiver: false
+      after:
+        timeout: 5ms
+      sequence:
+        - lambda: UARTDebug::log_hex(direction, bytes, '.');
+```
 
 ## For AI assistants
 

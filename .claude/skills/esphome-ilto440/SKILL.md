@@ -38,6 +38,15 @@ protocol knowledge or the entities change.
   a LEN-3 frame echoing type and that byte. Details and the unknowns: `docs/protocol.md`.
 - Undecoded: types 0x32 / 0x36 (service-menu settings) and several 0x73 bytes. The openHAB-derived
   status bits are unconfirmed on an ILTO - say so, don't present them as verified.
+- **A second layout, "CASA"**, was captured on an ILTO 440 Premium: `CC 64 <flags> <dst> <src> LEN
+  type <00|01> A0 data crc`, no `<n>` prefix, same CRC and 0x71 / 0x73 payloads (0x71 has 16 data
+  bytes there). The unit (0A) is the bus master: it broadcasts (FD) 0x73, 0x71 and one rotating type
+  per ~0.6 s round and polls the panel (01), which answers `A0 00 00 00`. `feed_()` tries both
+  layouts on every frame and the CRC decides; the first good frame sets `layout_`. **Nothing is sent
+  on the CASA layout** - commands are dropped with a warning (queued ones too) because the panel's
+  commands there were never captured, and an ILTO-layout frame sent onto that bus only collided
+  with the unit's traffic. To add control: capture the panel's answer to the poll while changing one
+  setting at a time, and only then allow sending for that layout.
 - **Service and installation settings are left out on purpose** (owner's decision): weekly timer,
   filter guard, summer cooling, heating, actuators, fan speed per mode and the rest of the
   installer menus. A wrong value can stop a unit from working, so they stay on the panel. Don't
@@ -82,7 +91,11 @@ The component logs `bytes N, frames ok M, bad crc K, last bytes: ...` every 10 s
 - `bytes 0`: no signal. First check the MAX485 has 5 V (VIN on a USB-powered NodeMCU does not),
   GND is shared, and A/B are on the middle pair (~1.7 V apart at idle). An unpowered module only
   passes ~6 µs spikes from the fan relays, which are easy to mistake for fast data.
-- `bytes` growing, `frames ok 0`: polarity - flip `ilto_bus_inverted`.
+- `bytes` growing, `frames ok 0`: polarity - flip `ilto_bus_inverted`. With an automatic-direction
+  module (no DE/RE pins; TX low drives the bus) `ilto_bus_inverted` must stay "false" or the module
+  holds the bus; swap A/B instead. If the last bytes already look like data (temperatures), the
+  polarity is right and the frame layout is new: get whole frames with the `uart: - id: !extend
+  ilto_bus_rx` debug snippet in the README.
 - "No acknowledgement ... giving up": DE/RE or DI not wired, or the bus was busy three times.
 
 ## Decoding a new message
@@ -103,6 +116,10 @@ The component logs `bytes N, frames ok M, bad crc K, last bytes: ...` every 10 s
   package reference with `!include esphome_ilto440/packages/ilto_premium.yaml`, set the substitution
   `ilto_components: esphome_ilto440/components`, add dummy `wifi_ssid`, `wifi_password`,
   `api_encryption_key` and `ota_password` secrets, and run `esphome compile` on each.
+- Framing and decoding can also be checked without ESPHome: compile `ilto_premium.h` on the host
+  against small stand-in headers for the `esphome/...` includes (`#define protected public` before
+  including it), push captured bytes into the UART stub and call `loop()`. Run a capture of each
+  layout through it and compare the published values with an unmodified build.
 - On hardware: after flashing, confirm the unit is still running (Ventilation on, fan power
   unchanged), then test a command with a short round trip (speed +1 and back) and look for
   "Unit acknowledged" in the log. Leave the unit as it was.

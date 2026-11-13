@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cmath>
 #include <deque>
 #include <map>
 #include <vector>
@@ -69,6 +70,24 @@
 // With a flow_control_pin (the transceiver's DE and RE) set, this sends the same commands as the
 // panel, in a pause between polls, and resends until the unit acknowledges. Every frame whose
 // content is new for its header and type is logged at DEBUG.
+//
+// A second bus layout ("CASA", short header) was captured on another ILTO / CASA Premium unit.
+// Same CC 64 start, same CRC and the same 0x71 / 0x73 payloads, but a 3-byte header
+// <flags> <destination> <source>, no length byte before CC, and the unit is the bus master:
+//
+//   CC | 64 | flags dst src | len | type | ?? A0 | payload (len - 3 bytes) | crc_hi | crc_lo
+//
+//   CC 64 85 FD 0A 13 71 00 A0 <16 bytes> crc crc   unit (0A) to all (FD): temperatures
+//   CC 64 85 FD 0A 18 73 00 A0 <21 bytes> crc crc   unit to all: status
+//   CC 64 85 FD 0A <len> <type> <00|01> A0 ...       one of ~35 other types, a different one each round
+//   CC 64 45 FD 0A 05 AA 00 00 02 0A crc crc         unit to all (meaning unknown)
+//   CC 64 45 01 0A 03 A0 00 00 crc crc               unit polls the panel (01)
+//   CC 64 85 0A 01 04 A0 00 00 00 crc crc            panel answers with nothing to report
+//
+// The round repeats about every 0.6 s. How the panel sends a command here was never captured, so
+// on this layout the component only listens: commands are dropped with a warning. Both layouts
+// are tried on every frame and the CRC picks the one that fits; the first good frame fixes the
+// layout for sending.
 
 namespace esphome::ilto_premium {
 
@@ -211,7 +230,14 @@ class IltoPremium : public Component, public uart::UARTDevice {
       this->recent_[this->recent_pos_++ % sizeof(this->recent_)] = b;
       this->feed_(b);
     }
-    if (this->pending_.empty() && !this->commands_.empty()) {
+    // Commands queued before the first good frame (e.g. the clock sync at boot) wait until the
+    // layout is known; on a layout this cannot send on they are dropped.
+    if (this->layout_ != LAYOUT_ILTO && this->layout_ != LAYOUT_UNKNOWN && !this->commands_.empty()) {
+      ESP_LOGW(TAG, "Sending is not supported on the %s bus layout yet; %u command(s) dropped",
+               layout_name_(this->layout_), (unsigned) this->commands_.size());
+      this->commands_.clear();
+    }
+    if (this->layout_ == LAYOUT_ILTO && this->pending_.empty() && !this->commands_.empty()) {
       this->pending_ = std::move(this->commands_.front());
       this->commands_.pop_front();
       this->attempts_ = 0;
@@ -242,14 +268,19 @@ class IltoPremium : public Component, public uart::UARTDevice {
 
   void dump_config() override {
     ESP_LOGCONFIG(TAG, "ILTO Premium bus %s", this->flow_control_pin_ != nullptr ? "listener and sender" : "listener (receive only)");
+    ESP_LOGCONFIG(TAG, "  Bus layout: %s", layout_name_(this->layout_));
     LOG_PIN("  Flow control pin: ", this->flow_control_pin_);
   }
+
+  // The two frame layouts seen on the bus (see the comment at the top).
+  enum Layout : uint8_t { LAYOUT_UNKNOWN, LAYOUT_ILTO, LAYOUT_CASA };
 
   float get_setup_priority() const override { return setup_priority::DATA; }
 
  protected:
-  static constexpr size_t HEADER_LEN = 7;  // 64 a b c d e len
-  static constexpr uint8_t MAX_LEN = 30;   // swegongw's limit for the len byte
+  static constexpr size_t HEADER_LEN = 7;       // ILTO layout: 64 a b c d e len
+  static constexpr size_t CASA_HEADER_LEN = 5;  // CASA layout: 64 flags dst src len
+  static constexpr uint8_t MAX_LEN = 30;        // swegongw's limit for the len byte
   static constexpr size_t MAX_SEEN = 48;   // distinct header + type remembered for logging
   static constexpr uint32_t QUIET_MS = 30;         // bus idle this long before sending
   static constexpr uint32_t ACK_TIMEOUT_MS = 500;  // resend after this without an ack
@@ -258,6 +289,8 @@ class IltoPremium : public Component, public uart::UARTDevice {
   uint8_t buf_[HEADER_LEN + MAX_LEN + 2];
   size_t pos_{0};
   bool in_frame_{false};
+  bool crc_failed_{false};  // a candidate length was reached in this frame but its CRC did not match
+  Layout layout_{LAYOUT_UNKNOWN};
   uint32_t frames_ok_{0};
   uint32_t frames_bad_{0};
   uint32_t bytes_{0};
@@ -307,6 +340,11 @@ class IltoPremium : public Component, public uart::UARTDevice {
       ESP_LOGW(TAG, "Cannot send without flow_control_pin");
       return;
     }
+    if (this->layout_ != LAYOUT_ILTO && this->layout_ != LAYOUT_UNKNOWN) {
+      ESP_LOGW(TAG, "Sending is not supported on the %s bus layout yet; %s not sent",
+               layout_name_(this->layout_), format_hex_pretty(data).c_str());
+      return;
+    }
     // A newer command of the same kind replaces one still waiting (e.g. several speed steps).
     for (auto &queued : this->commands_) {
       if (queued[0] == data[0] && queued[2] == data[2]) {
@@ -340,26 +378,70 @@ class IltoPremium : public Component, public uart::UARTDevice {
     ESP_LOGD(TAG, "Sent (try %u): %s", (unsigned) this->attempts_, format_hex_pretty(out).c_str());
   }
 
+  static size_t header_len_(Layout layout) { return layout == LAYOUT_CASA ? CASA_HEADER_LEN : HEADER_LEN; }
+  static const char *layout_name_(Layout layout) {
+    switch (layout) {
+      case LAYOUT_ILTO:
+        return "ILTO (long header)";
+      case LAYOUT_CASA:
+        return "CASA (short header, listen only)";
+      default:
+        return "not seen yet";
+    }
+  }
+
+  // Restart on this byte if it could itself be a start marker.
+  void restart_(uint8_t b) {
+    this->in_frame_ = b == 0xCC;
+    this->pos_ = 0;
+    this->crc_failed_ = false;
+  }
+
+  // Collects the bytes after CC. The length byte sits at a different place in each layout, so both
+  // are tried; a frame is taken when its length is complete and the CRC matches. Neither layout's
+  // length byte is plausible in the other's frames (an ILTO header has 00 where CASA has its length,
+  // a CASA frame has the type, always above MAX_LEN so far, where ILTO has its length), and the CRC
+  // rules out the rest.
   void feed_(uint8_t b) {
     if (!this->in_frame_) {
-      if (b == 0xCC) {
-        this->in_frame_ = true;
-        this->pos_ = 0;
-      }
+      if (b == 0xCC)
+        this->restart_(b);
       return;
     }
     this->buf_[this->pos_++] = b;
-    bool bad = this->buf_[0] != 0x64 ||
-               (this->pos_ == HEADER_LEN && (this->buf_[6] < 3 || this->buf_[6] > MAX_LEN));
-    if (bad) {
-      // Restart on this byte if it could itself be a start marker.
-      this->in_frame_ = b == 0xCC;
-      this->pos_ = 0;
+    if (this->buf_[0] != 0x64) {
+      this->restart_(b);
       return;
     }
-    if (this->pos_ > HEADER_LEN && this->pos_ == HEADER_LEN + this->buf_[6] + 2) {
-      this->handle_frame_();
-      this->in_frame_ = false;
+    bool possible = false;
+    for (Layout layout : {LAYOUT_CASA, LAYOUT_ILTO}) {
+      const size_t header = header_len_(layout);
+      if (this->pos_ < header) {
+        possible = true;
+        continue;
+      }
+      const uint8_t len = this->buf_[header - 1];
+      if (len < 3 || len > MAX_LEN)
+        continue;
+      const size_t total = header + len + 2;
+      if (this->pos_ < total) {
+        possible = true;
+      } else if (this->pos_ == total) {
+        const uint16_t crc = (uint16_t(this->buf_[total - 2]) << 8) | this->buf_[total - 1];
+        if (crc16_ccitt_(this->buf_, total - 2) == crc) {
+          this->handle_frame_(layout, total);
+          this->in_frame_ = false;
+          return;
+        }
+        this->crc_failed_ = true;
+      }
+    }
+    if (!possible) {
+      if (this->crc_failed_) {
+        this->frames_bad_++;
+        ESP_LOGV(TAG, "CRC mismatch: CC %s", format_hex_pretty(this->buf_, this->pos_ - 1).c_str());
+      }
+      this->restart_(b);
     }
   }
 
@@ -373,25 +455,30 @@ class IltoPremium : public Component, public uart::UARTDevice {
     return crc;
   }
 
-  void handle_frame_() {
-    const size_t len = this->pos_;
-    const uint16_t crc = (uint16_t(this->buf_[len - 2]) << 8) | this->buf_[len - 1];
-    if (crc16_ccitt_(this->buf_, len - 2) != crc) {
-      this->frames_bad_++;
-      ESP_LOGV(TAG, "CRC mismatch: CC %s", format_hex_pretty(this->buf_, len).c_str());
-      return;
-    }
+  // A frame with a good CRC, len bytes from 64 to the end of the CRC.
+  void handle_frame_(Layout layout, size_t len) {
     this->frames_ok_++;
+    if (layout != this->layout_) {
+      if (this->layout_ == LAYOUT_UNKNOWN) {
+        ESP_LOGI(TAG, "Bus layout: %s", layout_name_(layout));
+      } else {
+        ESP_LOGW(TAG, "Bus layout changed from %s to %s", layout_name_(this->layout_), layout_name_(layout));
+      }
+      this->layout_ = layout;
+    }
 
-    const uint8_t type = this->buf_[7];
-    const uint8_t *p = this->buf_ + 10;
-    const size_t n = this->buf_[6] - 3;
+    // From the type on, both layouts carry: type, two bytes (00 FF / 00-01 A0), payload.
+    const size_t header = header_len_(layout);
+    const uint8_t type = this->buf_[header];
+    const uint8_t *p = this->buf_ + header + 3;
+    const size_t n = this->buf_[header - 1] - 3;
 
     ESP_LOGV(TAG, "frame: CC %s", format_hex_pretty(this->buf_, len).c_str());
-    // Header bytes a..e plus the type tell the frames apart (request vs answer, which value).
+    // The header bytes plus the type tell the frames apart (request vs answer, which value).
     uint64_t key = type;
-    for (size_t i = 1; i <= 5; i++)
+    for (size_t i = 1; i < header - 1; i++)
       key = (key << 8) | this->buf_[i];
+    key = (key << 8) | layout;
     std::vector<uint8_t> body(this->buf_, this->buf_ + len - 2);
     auto it = this->seen_.find(key);
     if (it == this->seen_.end() || it->second != body) {
@@ -404,18 +491,21 @@ class IltoPremium : public Component, public uart::UARTDevice {
         this->seen_.emplace(key, std::move(body));
     }
 
-    if (this->awaiting_ack_ && this->buf_[1] == 0x8A && n == 0 && type == this->pending_[0] &&
-        this->buf_[9] == this->pending_[2]) {
-      ESP_LOGI(TAG, "Unit acknowledged %s", format_hex_pretty(this->pending_).c_str());
-      this->pending_.clear();
-      this->awaiting_ack_ = false;
-    }
     // A speed / power / mode command (the panel's or ours) changes the speed before the next status
     // shows it, so treat the speed as unknown until then.
     if (type == 0x20)
       this->reported_speed_ = 0;
-    if (this->buf_[1] == 0x4A && type == 0x20 && this->buf_[9] == 0x0C && n + 3 == this->speed_command_.size())
-      this->speed_command_.assign(this->buf_ + 7, this->buf_ + 7 + n + 3);
+    // Acks and the panel's commands are only known for the ILTO layout.
+    if (layout == LAYOUT_ILTO) {
+      if (this->awaiting_ack_ && this->buf_[1] == 0x8A && n == 0 && type == this->pending_[0] &&
+          this->buf_[9] == this->pending_[2]) {
+        ESP_LOGI(TAG, "Unit acknowledged %s", format_hex_pretty(this->pending_).c_str());
+        this->pending_.clear();
+        this->awaiting_ack_ = false;
+      }
+      if (this->buf_[1] == 0x4A && type == 0x20 && this->buf_[9] == 0x0C && n + 3 == this->speed_command_.size())
+        this->speed_command_.assign(this->buf_ + 7, this->buf_ + 7 + n + 3);
+    }
 
     switch (type) {
       case 0x21:
@@ -446,10 +536,13 @@ class IltoPremium : public Component, public uart::UARTDevice {
         // p[17] the selected speed x 20 %, p[19] 1 while the unit is switched off. The other bits
         // are openHAB's.
         if (n >= 20) {
+          // p[4] & 0x20: the panel shows the 3-step Away / Home / Boost screen, and p[17] is then not
+          // the speed the fans run at, so the speed is reported as unknown.
+          const bool three_step = p[4] & 0x20;
           publish_(this->supply_fan_power_sensor_, p[12]);
           publish_(this->extract_fan_power_sensor_, p[13]);
           // The selected speed while running, 0 while switched off.
-          publish_(this->fan_speed_sensor_, p[19] ? 0 : p[17] / 20);
+          publish_(this->fan_speed_sensor_, p[19] ? 0.0f : three_step ? NAN : float(p[17] / 20));
           publish_(this->running_binary_sensor_, p[19] == 0);
           if (this->ventilation_switch_ != nullptr)
             this->ventilation_switch_->publish_state(p[19] == 0);
@@ -462,7 +555,9 @@ class IltoPremium : public Component, public uart::UARTDevice {
           const size_t mode = p[19]            ? MODE_OFF
                               : (p[1] & 0x01) ? MODE_FIREPLACE
                                               : size_t(clamp(p[17] / 20, 1, 5));
-          if (this->mode_select_ != nullptr && mode != this->published_mode_) {
+          // With the 3-step screen a speed mode is not known; show nothing rather than a wrong speed.
+          const bool mode_known = !three_step || mode == MODE_OFF || mode == MODE_FIREPLACE;
+          if (this->mode_select_ != nullptr && mode_known && mode != this->published_mode_) {
             this->published_mode_ = mode;
             this->mode_select_->publish_state(mode);
           }
