@@ -208,6 +208,22 @@ CC 64 85 01 0A 06 20 00 81 01 <step> <fan %> crc crc                unit acks to
 | Boost 30 / 60 / 120 min | 02 | 1E / 3C / 78 | 3C (60 %) |
 | Boost (no time limit) | 02 | 00 | 3C |
 
+Switching the unit off and on again from the panel's main menu sent the same 11 bytes with a
+different third byte - as on the ILTO layout, where off / on is the speed command with 10 / 20:
+
+```
+CC 64 45 0A 01 0B 20 00 10 01 00 00 28 00 00 00 00 CD 90    panel: off
+CC 64 85 01 0A 04 20 00 10 01 5A FE                          unit acks
+CC 64 45 0A 01 0B 20 00 20 01 00 00 28 00 00 00 00 39 92    panel: on
+CC 64 85 01 0A 04 20 00 20 01 5F 6B                          unit acks
+```
+
+After off, 0x73 showed p[19] = 01, p[20] 03 then 04, fans 0 %, p[0] C1 -> 41, p[2] 14 -> 10, p[4]
+21 -> 00, p[8] 00 -> C0. After on: p[19] 00, p[20] 05 then 07 within a second, fans back to 40 %
+at once, and about a minute later (when the panel stopped showing "starting") p[8] C0 -> 40, p[0]
+41 -> C1, p[4] 00 -> 01. p[4] stayed 01 rather than going back to 21, so on this unit p[4] does not
+tell the 3-step screen apart.
+
 The panel sends one command for every choice it passes on its list: Boost 120 min from Home sent
 30, 60 and 120 min in turn, each acked. The `28` byte was the same in every frame (meaning
 unknown; the component keeps the panel's last-seen frame and changes only `<step>` and `<min>`).
@@ -217,7 +233,7 @@ panel's empty answer** (`CC 64 85 0A 01 04 A0 00 00 00`): the next frame starts 
 the 18 bytes take under 5 ms. It sends 5-70 ms after that answer, at most once per round, and tries
 three rounds before giving up. Confirmed on the unit: Away and Home sent this way were acked
 within ~10 ms on the first try, the fans changed (20 % / 40 %) and the status followed. Not
-captured yet on this layout: speed 1-5 with the 5-step screen, off/on, fireplace, clock; those
+captured yet on this layout: speed 1-5 with the 5-step screen, fireplace, clock; those
 commands are dropped with a warning.
 
 ## Settings not decoded, on purpose

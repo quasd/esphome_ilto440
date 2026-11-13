@@ -48,6 +48,10 @@ protocol knowledge or the entities change.
   Away, 01 Home, 02 Boost; min 1E/3C/78 or 00 (no limit). Status 0x73: p[14] step, p[5] the boost's length (does not count down; `boost_time` is the ESP's own countdown from the boost's start, unknown after a restart mid-boost),
   p[19] 0x20 during a timed boost (so "off" is `p[19] & 0x01` only). The component sends as the
   panel (01) 5-70 ms after the panel's empty answer (`casa_slot_*`), once per round, 3 tries.
+  Off / on: the same 11 bytes with select 10 / 20 (acks `20 00 10 01` / `20 00 20 01`); `set_power()`
+  builds them from `step_command_` and refuses while the layout is unknown. 0x73 after off: p[19] 01,
+  p[20] 03/04; after on p[20] 05 -> 07, p[4] comes back as 01 (not 21), so on CASA the fan speed is
+  always unknown.
   `supported_()` says which commands have a known form per layout; anything else is dropped with a
   warning, queued ones too. An ILTO-layout frame sent onto the CASA bus only collided with the
   unit's traffic - never send a frame whose form was not captured on that layout. To add a command:

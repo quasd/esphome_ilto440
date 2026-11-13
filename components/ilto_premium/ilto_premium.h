@@ -95,8 +95,9 @@
 //
 // The status (0x73) then carries the choice in p[14] (00 / 01 / 02), the boost minutes in p[5],
 // and p[19] = 0x20 during a timed boost. The component sends the same command, as the panel (01),
-// in the pause after the panel's empty answer. Only this command is known on this layout; the
-// others (speed 1-5, off, fireplace, clock) are dropped with a warning. Both layouts are tried on
+// in the pause after the panel's empty answer. Off and on are the same 11 bytes with 10 / 20 in place
+// of 81 (acked 20 00 10 01 / 20 00 20 01). The speed 1-5, fireplace and clock commands are not known
+// on this layout and are dropped with a warning. Both layouts are tried on
 // every frame and the CRC picks the one that fits; the first good frame fixes the layout for sending.
 
 namespace esphome::ilto_premium {
@@ -246,8 +247,18 @@ class IltoPremium : public Component, public uart::UARTDevice {
   }
 
   // The panel's off/on commands are its speed command with 0x10 / 0x20 in place of 0x0C.
+  // On CASA it is the panel's 3-step command with 0x10 / 0x20 in place of 0x81. The form depends on
+  // the layout, so nothing can be queued before the first frame has shown which one it is.
   void set_power(bool on) {
-    std::vector<uint8_t> data = this->speed_command_;
+    if (this->layout_ == LAYOUT_UNKNOWN) {
+      ESP_LOGW(TAG, "Bus layout not seen yet; power command not sent");
+      return;
+    }
+    if (this->running_ == (on ? 1 : 0) && !this->command_waiting_(0x20, 0x10) && !this->command_waiting_(0x20, 0x20)) {
+      ESP_LOGD(TAG, "The unit is already %s, nothing sent", on ? "on" : "off");
+      return;
+    }
+    std::vector<uint8_t> data = this->layout_ == LAYOUT_CASA ? this->step_command_ : this->speed_command_;
     data[2] = on ? 0x20 : 0x10;
     this->queue_(std::move(data));
   }
@@ -421,8 +432,12 @@ class IltoPremium : public Component, public uart::UARTDevice {
   // Which commands have a known form on each layout: on CASA only the 3-step command (20 00 81),
   // which in turn is not known on ILTO.
   static bool supported_(Layout layout, const std::vector<uint8_t> &data) {
-    const bool step = data.size() > 2 && data[0] == 0x20 && data[2] == 0x81;
-    return layout == LAYOUT_CASA ? step : !step;
+    // CASA knows the panel's 11-byte 0x20 command with select 81 (3-step), 10 (off) and 20 (on).
+    const bool casa_form = data.size() == 11 && data[0] == 0x20 &&
+                           (data[2] == 0x81 || data[2] == 0x10 || data[2] == 0x20);
+    if (layout == LAYOUT_CASA)
+      return casa_form;
+    return !(data.size() > 2 && data[0] == 0x20 && data[2] == 0x81) && !casa_form;
   }
 
   // ILTO: the panel polls and the bus is idle for about a second between polls, so any pause will
@@ -621,9 +636,11 @@ class IltoPremium : public Component, public uart::UARTDevice {
         this->step_command_.assign(this->buf_ + 5, this->buf_ + 5 + n + 3);
         this->boost_minutes_ = this->step_command_[3] == 0x02 ? this->step_command_[10] : 0;
       }
-      // The unit's ack to the panel: 20 00 81 01 <step> <fan %>.
+      // The unit's ack to the panel: 20 00 81 01 <step> <fan %>, or 20 00 10 01 / 20 00 20 01 for
+      // off / on.
+      const bool ack_matches = select == 0x81 ? n >= 2 && p[1] == this->pending_[3] : n >= 1;
       if (this->awaiting_ack_ && src == 0x0A && dst == 0x01 && type == this->pending_[0] && select == this->pending_[2] &&
-          n >= 2 && p[1] == this->pending_[3]) {
+          ack_matches) {
         ESP_LOGI(TAG, "Unit acknowledged %s", format_hex_pretty(this->pending_).c_str());
         this->boost_minutes_ = this->pending_[3] == 0x02 ? this->pending_[10] : 0;
         this->pending_.clear();
@@ -669,7 +686,10 @@ class IltoPremium : public Component, public uart::UARTDevice {
           publish_(this->supply_fan_power_sensor_, p[12]);
           publish_(this->extract_fan_power_sensor_, p[13]);
           // The selected speed while running, 0 while switched off.
-          publish_(this->fan_speed_sensor_, off ? 0.0f : three_step ? NAN : float(p[17] / 20));
+          // The CASA unit leaves p[17] at 0, and p[4] lost its 0x20 after an off/on, so its speed is
+          // never known from here.
+          const bool speed_unknown = three_step || layout == LAYOUT_CASA;
+          publish_(this->fan_speed_sensor_, off ? 0.0f : speed_unknown ? NAN : float(p[17] / 20));
           publish_(this->running_binary_sensor_, !off);
           if (this->ventilation_switch_ != nullptr)
             this->ventilation_switch_->publish_state(!off);
@@ -721,7 +741,7 @@ class IltoPremium : public Component, public uart::UARTDevice {
                               : (p[1] & 0x01) ? MODE_FIREPLACE
                                               : size_t(clamp(p[17] / 20, 1, 5));
           // With the 3-step screen a speed mode is not known; show nothing rather than a wrong speed.
-          const bool mode_known = !three_step || mode == MODE_OFF || mode == MODE_FIREPLACE;
+          const bool mode_known = !speed_unknown || mode == MODE_OFF || mode == MODE_FIREPLACE;
           if (this->mode_select_ != nullptr && mode_known && mode != this->published_mode_) {
             this->published_mode_ = mode;
             this->mode_select_->publish_state(mode);

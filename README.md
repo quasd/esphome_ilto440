@@ -46,7 +46,7 @@ by itself (the log says `Bus layout: ...` once the first frame arrives):
 | Layout | Seen on | Reading | Control (speed, on/off, fireplace, clock) |
 |---|---|---|---|
 | ILTO, long header (`CC 64 4A 00 FD 00 FD ...`, panel is bus master) | ILTO 440 econo | Yes | Yes |
-| CASA, short header (`CC 64 85 FD 0A ...`, unit is bus master) | ILTO 440 Premium (ESP32 + MAX3485) | Yes: temperatures, efficiency, fan power, running, Away / Home / Boost | Away / Home / Boost 30-120 min / Boost (the **Ventilation mode** select). Speed 1-5, off, fireplace and clock are not captured yet and are dropped with a warning |
+| CASA, short header (`CC 64 85 FD 0A ...`, unit is bus master) | ILTO 440 Premium (ESP32 + MAX3485) | Yes: temperatures, efficiency, fan power, running, Away / Home / Boost | Away / Home / Boost 30-120 min / Boost (the **Ventilation mode** select), off / on (the **Ventilation** switch). Speed 1-5, fireplace and clock are not captured yet and are dropped with a warning |
 
 ## Parts
 
@@ -158,7 +158,7 @@ ilto_premium:
 |---|---|
 | [examples/ilto-minimal.yaml](examples/ilto-minimal.yaml) | The tested unit's configuration: the package plus `!remove` |
 | [examples/ilto-custom-pins.yaml](examples/ilto-custom-pins.yaml) | The same with DI and DE/RE on other pins |
-| [examples/ilto-esp32-auto-direction.yaml](examples/ilto-esp32-auto-direction.yaml) | ESP32 with a 3.3 V RS-485 module that switches direction by itself (MAX3485 boards without DE/RE pins): no resistors, `ilto_bus_inverted: "false"`, A/B the right way round. Also the CASA-layout unit's setup: Ventilation mode select, Boost time, clock sync off |
+| [examples/ilto-esp32-auto-direction.yaml](examples/ilto-esp32-auto-direction.yaml) | ESP32 with a 3.3 V RS-485 module that switches direction by itself (MAX3485 boards without DE/RE pins): no resistors, `ilto_bus_inverted: "false"`, A/B the right way round. Also the CASA-layout unit's setup: Ventilation mode select, Ventilation on/off switch, Boost time left, clock sync off |
 
 From your own ESPHome lambdas the component offers:
 
@@ -177,13 +177,14 @@ id(ilto).set_step(2);             // CASA layout: 0 Away, 1 Home, 2-4 Boost 30/6
 |---|---|---|
 | Sensor 1-8 temperature | sensor, °C | Numbered as on the panel. Which duct each measures depends on the unit. The unit sends whole degrees; the 15 s average shows one decimal, which tells roughly where between two whole degrees the reading sits |
 | Heat recovery efficiency | sensor, % | |
-| Fan speed | sensor | Selected speed 1-5, 0 while the unit is off. Unknown while the panel shows the 3-step Away / Home / Boost screen, which does not report the speed |
+| Fan speed | sensor | Selected speed 1-5, 0 while the unit is off. Unknown while the panel shows the 3-step Away / Home / Boost screen, which does not report the speed, and always on the CASA layout |
 | Supply fan power, Extract fan power | sensor, % | 0 when the unit is off |
 | CO2, Humidity | sensor | Only with those options; scale unchecked |
 | Supply fan rpm, Extract fan rpm | sensor | Not reported by econo models |
 | Ventilation | select | Off, 1-5 or Fireplace: the unit's state, and how to change it. Right after switching on, the unit keeps its start speed for about a minute before a new speed takes effect (Supply / Extract fan power show when). Fireplace runs supply 100 %, extract 20 % for ~10 min to start a fire, then the unit returns to its speed |
 | Ventilation mode (`step_mode`) | select | CASA layout only, not in the package (see the ESP32 example): Away, Home, Boost 30 / 60 / 120 min, Boost - the panel's 3-step screen. Shows the unit's choice and sends the panel's command |
 | Boost time left (`boost_time`) | sensor, min | CASA layout only: minutes left of a timed boost, 0 otherwise. The unit reports only the boost's length, so the ESP counts from when the boost started; for a boost already running when the ESP started it is unknown |
+| Ventilation (`ventilation`) | switch | Optional, not in the package: the unit on / off, as the panel's main menu. Used by the ESP32 example for the CASA layout, where the speed select's commands are not known |
 | Clock sync | switch (config) | On by default: set the unit's clock after boot and at 04:05 daily |
 | Sync clock now | button (config) | |
 | Heat recovery bypass, External boost, Defrosting, Freeze protection, Filter alarm, Service reminder, Fan failure, Emergency stop | binary sensor | Bit positions from the openHAB binding, not yet seen changing on an ILTO |

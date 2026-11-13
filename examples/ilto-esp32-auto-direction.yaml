@@ -16,9 +16,9 @@
 # round (swap the wires rather than the setting).
 #
 # The tested unit uses the CASA bus layout (see the README), where the panel's 3-step control
-# (Away / Home / Boost) is known but the speed, power, fireplace and clock commands are not. So
-# this file adds the Ventilation mode select, drops the package's Ventilation (speed) select, and
-# keeps the clock sync off. On an ILTO-layout unit, leave those three changes out.
+# (Away / Home / Boost) and off / on are known, but the speed, fireplace and clock commands are not.
+# So this file adds the Ventilation mode select and an on/off switch, drops the package's speed
+# select and fan speed sensor, and keeps the clock sync off. On an ILTO-layout unit, leave those out.
 
 substitutions:
   name: ilto-440
@@ -67,8 +67,12 @@ ilto_premium:
     name: "Boost time left"
     filters:
       - delta: 0.5
-  # The speed select's commands are not known on the CASA layout.
+  # The unit on / off.
+  ventilation:
+    name: "Ventilation"
+  # The speed select's commands and the speed itself are not known on the CASA layout.
   mode: !remove
+  fan_speed: !remove
   # Sensors this unit does not have (the panel shows 0, or 110-111 for a temperature):
   temperature_7: !remove
   co2: !remove
