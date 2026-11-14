@@ -711,7 +711,9 @@ class IltoPremium : public Component, public uart::UARTDevice {
       case 0x4D:
         // CASA: the unit's after-heating setting, p[2] 03 on / 01 off (the panel changes it with type 0x4C,
         // which is left on the panel on purpose).
-        if (layout == LAYOUT_CASA && n >= 3)
+        // Two records alternate (the byte after the type, 00 / 01); only record 00 changed with the setting,
+        // record 01 stayed 03.
+        if (layout == LAYOUT_CASA && n >= 3 && p[-2] == 0x00)
           publish_(this->after_heating_enabled_binary_sensor_, p[2] & 0x02);
         break;
       case 0x55:
