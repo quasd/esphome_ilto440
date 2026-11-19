@@ -6,7 +6,7 @@
 # mode and power the way the panel does, and keeps the unit's clock and weekday in step with
 # Home Assistant ("Clock sync" switch).
 #
-# Use at your own risk: unofficial and reverse-engineered, tested on one unit only, no warranty.
+# Use at your own risk: unofficial and reverse-engineered, tested on two units only, no warranty.
 # Written by Claude (Anthropic's AI assistant). See README.md: https://github.com/quasd/esphome_ilto440
 #
 # Include from a device file (see examples/):
@@ -19,6 +19,12 @@
 #   ilto_premium:
 #     temperature_7: !remove
 #     co2: !remove
+#
+# Two bus layouts are known (README, Compatibility); the component recognises either. On the CASA
+# layout the 3-step command (Away / Home / Boost), off / on, fireplace and the clock are known: add
+# `step_mode`, `ventilation`, `fireplace_mode` and `unit_clock` (see
+# examples/ilto-esp32-auto-direction.yaml); the Ventilation select's speeds need the panel's 5-step
+# screen there.
 #
 # Pins and bus polarity are substitutions; override them in the device file's `substitutions:`.
 # The defaults are for an ESP8266 with a 5 V MAX485 module (docs/wiring.svg):
