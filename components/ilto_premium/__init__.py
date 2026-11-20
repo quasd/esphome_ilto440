@@ -6,8 +6,13 @@ from esphome import pins
 import esphome.config_validation as cv
 from esphome.components import binary_sensor, select, sensor, switch, text_sensor, uart
 from esphome.const import (
+    CONF_CO2,
+    CONF_FLOW_CONTROL_PIN,
+    CONF_HUMIDITY,
     CONF_ID,
+    CONF_MODE,
     CONF_RESTORE_MODE,
+    CONF_STEP_MODE,
     DEVICE_CLASS_CARBON_DIOXIDE,
     DEVICE_CLASS_HUMIDITY,
     DEVICE_CLASS_PROBLEM,
@@ -22,6 +27,14 @@ from esphome.const import (
 )
 
 DEPENDENCIES = ["uart"]
+
+# Keys ESPHome has no constant for.
+CONF_TX_UART_ID = "tx_uart_id"
+CONF_EFFICIENCY = "efficiency"
+CONF_FAN_SPEED = "fan_speed"
+CONF_BOOST_TIME = "boost_time"
+CONF_UNIT_CLOCK = "unit_clock"
+CONF_BASIC_DISPLAY = "basic_display"
 AUTO_LOAD = ["sensor", "binary_sensor", "select", "switch", "text_sensor"]
 
 ilto_premium_ns = cg.esphome_ns.namespace("ilto_premium")
@@ -70,47 +83,47 @@ PROBLEMS = ["filter_alarm", "service_reminder", "fan_failure", "emergency_stop"]
 SCHEMA = {
     cv.GenerateID(): cv.declare_id(IltoPremium),
     # The transceiver's DE and RE, tied together: high while sending.
-    cv.Optional("flow_control_pin"): pins.gpio_output_pin_schema,
+    cv.Optional(CONF_FLOW_CONTROL_PIN): pins.gpio_output_pin_schema,
     # Send on this UART instead of the receiving one.
-    cv.Optional("tx_uart_id"): cv.use_id(uart.UARTComponent),
-    cv.Optional("efficiency"): sensor.sensor_schema(
+    cv.Optional(CONF_TX_UART_ID): cv.use_id(uart.UARTComponent),
+    cv.Optional(CONF_EFFICIENCY): sensor.sensor_schema(
         unit_of_measurement=UNIT_PERCENT,
         accuracy_decimals=0,
         state_class=STATE_CLASS_MEASUREMENT,
         icon="mdi:heat-wave",
     ),
     # Raw bytes as openHAB reads them; the scale is unchecked (0 on units without the option).
-    cv.Optional("co2"): sensor.sensor_schema(
+    cv.Optional(CONF_CO2): sensor.sensor_schema(
         unit_of_measurement=UNIT_PARTS_PER_MILLION,
         accuracy_decimals=0,
         device_class=DEVICE_CLASS_CARBON_DIOXIDE,
         state_class=STATE_CLASS_MEASUREMENT,
     ),
-    cv.Optional("humidity"): sensor.sensor_schema(
+    cv.Optional(CONF_HUMIDITY): sensor.sensor_schema(
         unit_of_measurement=UNIT_PERCENT,
         accuracy_decimals=0,
         device_class=DEVICE_CLASS_HUMIDITY,
         state_class=STATE_CLASS_MEASUREMENT,
     ),
     # The speed selected on the panel, 1-5.
-    cv.Optional("fan_speed"): sensor.sensor_schema(
+    cv.Optional(CONF_FAN_SPEED): sensor.sensor_schema(
         accuracy_decimals=0, state_class=STATE_CLASS_MEASUREMENT, icon="mdi:fan"
     ),
 }
 # One control for off / speed 1-5 / fireplace.
-SCHEMA[cv.Optional("mode")] = select.select_schema(IltoModeSelect, icon="mdi:fan")
+SCHEMA[cv.Optional(CONF_MODE)] = select.select_schema(IltoModeSelect, icon="mdi:fan")
 # Away / Home / Boost, as the panel's 3-step screen (CASA bus layout only).
-SCHEMA[cv.Optional("step_mode")] = select.select_schema(IltoStepSelect, icon="mdi:home-switch")
+SCHEMA[cv.Optional(CONF_STEP_MODE)] = select.select_schema(IltoStepSelect, icon="mdi:home-switch")
 # The unit's own clock, "Fri 19:23" (CASA bus layout).
-SCHEMA[cv.Optional("unit_clock")] = text_sensor.text_sensor_schema(
+SCHEMA[cv.Optional(CONF_UNIT_CLOCK)] = text_sensor.text_sensor_schema(
     icon="mdi:clock-outline", entity_category=ENTITY_CATEGORY_DIAGNOSTIC
 )
 # The panel's basic display from 0x73 p[15], "Basic display 1" / "Basic display 2" (CASA bus layout).
-SCHEMA[cv.Optional("basic_display")] = text_sensor.text_sensor_schema(
+SCHEMA[cv.Optional(CONF_BASIC_DISPLAY)] = text_sensor.text_sensor_schema(
     icon="mdi:monitor-dashboard", entity_category=ENTITY_CATEGORY_DIAGNOSTIC
 )
 # Minutes left of a timed boost (CASA bus layout), counted by the ESP from the boost's start; 0 otherwise.
-SCHEMA[cv.Optional("boost_time")] = sensor.sensor_schema(
+SCHEMA[cv.Optional(CONF_BOOST_TIME)] = sensor.sensor_schema(
     unit_of_measurement=UNIT_MINUTE,
     accuracy_decimals=0,
     state_class=STATE_CLASS_MEASUREMENT,
@@ -169,29 +182,32 @@ async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
     await uart.register_uart_device(var, config)
-    if "flow_control_pin" in config:
-        pin = await cg.gpio_pin_expression(config["flow_control_pin"])
+    if CONF_FLOW_CONTROL_PIN in config:
+        pin = await cg.gpio_pin_expression(config[CONF_FLOW_CONTROL_PIN])
         cg.add(var.set_flow_control_pin(pin))
-    if "tx_uart_id" in config:
-        tx_uart = await cg.get_variable(config["tx_uart_id"])
+    if CONF_TX_UART_ID in config:
+        tx_uart = await cg.get_variable(config[CONF_TX_UART_ID])
         cg.add(var.set_tx_uart(tx_uart))
 
-    for key in ["efficiency", "co2", "humidity", "fan_speed", "boost_time", *TEMPERATURES, *FAN_RPMS, *FAN_POWERS, *RAW_CODES]:
+    for key in [
+        CONF_EFFICIENCY, CONF_CO2, CONF_HUMIDITY, CONF_FAN_SPEED, CONF_BOOST_TIME,
+        *TEMPERATURES, *FAN_RPMS, *FAN_POWERS, *RAW_CODES,
+    ]:
         if key in config:
             sens = await sensor.new_sensor(config[key])
             cg.add(getattr(var, f"set_{key}_sensor")(sens))
-    if "mode" in config:
-        sel = await select.new_select(config["mode"], options=MODE_OPTIONS)
+    if CONF_MODE in config:
+        sel = await select.new_select(config[CONF_MODE], options=MODE_OPTIONS)
         await cg.register_parented(sel, var)
         cg.add(var.set_mode_select(sel))
-    if "basic_display" in config:
-        ts = await text_sensor.new_text_sensor(config["basic_display"])
+    if CONF_BASIC_DISPLAY in config:
+        ts = await text_sensor.new_text_sensor(config[CONF_BASIC_DISPLAY])
         cg.add(var.set_basic_display_text_sensor(ts))
-    if "unit_clock" in config:
-        ts = await text_sensor.new_text_sensor(config["unit_clock"])
+    if CONF_UNIT_CLOCK in config:
+        ts = await text_sensor.new_text_sensor(config[CONF_UNIT_CLOCK])
         cg.add(var.set_unit_clock_text_sensor(ts))
-    if "step_mode" in config:
-        sel = await select.new_select(config["step_mode"], options=STEP_OPTIONS)
+    if CONF_STEP_MODE in config:
+        sel = await select.new_select(config[CONF_STEP_MODE], options=STEP_OPTIONS)
         await cg.register_parented(sel, var)
         cg.add(var.set_step_select(sel))
     for key, (kind, _) in SWITCHES.items():

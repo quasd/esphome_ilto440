@@ -15,7 +15,8 @@ was written down from captures, not from documentation.
 
 | Path | What |
 |---|---|
-| `components/ilto_premium/ilto_premium.h` | The whole component (header-only): framing, CRC, decoding, the send queue. Its header comment is the protocol reference kept next to the code |
+| `components/ilto_premium/ilto_premium.h` | The classes, constants and state. Its top comment is the protocol reference kept next to the code |
+| `components/ilto_premium/ilto_premium.cpp` | The implementation: framing, CRC, decoding, the send queue. Logs bytes with `format_hex_pretty_to()` into a stack `HexBuf` (no heap); the new / changed frame log keeps one CRC per frame kind in a fixed table, DEBUG builds only |
 | `components/ilto_premium/__init__.py` | Schema: every sensor optional; `flow_control_pin`, `tx_uart_id` |
 | `packages/ilto_premium.yaml` | What users include: uart, every entity, the switches, clock sync, pins as substitutions, `ilto_components` (component source) |
 | `examples/*.yaml` | Minimal (the tested unit) and custom pins (DI and DE/RE on other GPIOs) |
@@ -136,7 +137,7 @@ The component logs `bytes N, frames ok M, bad crc K, last bytes: ...` every 10 s
   package reference with `!include esphome_ilto440/packages/ilto_premium.yaml`, set the substitution
   `ilto_components: esphome_ilto440/components`, add dummy `wifi_ssid`, `wifi_password`,
   `api_encryption_key` and `ota_password` secrets, and run `esphome compile` on each.
-- Framing and decoding can also be checked without ESPHome: compile `ilto_premium.h` on the host
+- Framing and decoding can also be checked without ESPHome: compile `ilto_premium.cpp` on the host
   against small stand-in headers for the `esphome/...` includes (`#define protected public` before
   including it), push captured bytes into the UART stub and call `loop()`. Run a capture of each
   layout through it and compare the published values with an unmodified build.
