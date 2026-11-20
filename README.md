@@ -109,6 +109,9 @@ Pin notes (why not other pins):
 
 ## Installation
 
+Needs **ESPHome 2026.1.0 or newer** (tested on 2026.11.0); an older ESPHome stops at config
+validation with a message saying so.
+
 1. Wire it as above. Plug the cable into the panel's spare socket (the one for chaining a second
    panel).
 2. In ESPHome, create a device from [examples/ilto-minimal.yaml](examples/ilto-minimal.yaml)

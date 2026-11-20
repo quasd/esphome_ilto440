@@ -351,7 +351,8 @@ class IltoPremium : public Component, public uart::UARTDevice {
         if (supported_(this->layout_, *it)) {
           ++it;
         } else {
-          ESP_LOGW(TAG, "%s is not known on the %s bus layout; not sent", format_hex_pretty(*it).c_str(),
+          HexBuf hex;
+          ESP_LOGW(TAG, "%s is not known on the %s bus layout; not sent", format_hex_pretty_to(hex, *it, '.'),
                    layout_name_(this->layout_));
           it = this->commands_.erase(it);
         }
@@ -366,8 +367,9 @@ class IltoPremium : public Component, public uart::UARTDevice {
       if (this->awaiting_ack_ && now - this->sent_at_ >= ACK_TIMEOUT_MS) {
         this->awaiting_ack_ = false;
         if (this->attempts_ >= MAX_ATTEMPTS) {
+          HexBuf hex;
           ESP_LOGW(TAG, "No acknowledgement for %s after %u tries, giving up",
-                   format_hex_pretty(this->pending_).c_str(), (unsigned) this->attempts_);
+                   format_hex_pretty_to(hex, this->pending_, '.'), (unsigned) this->attempts_);
           // The unit never took "on": a choice held for after it must not wait for some later start.
           if (this->pending_.size() > 2 && this->pending_[0] == 0x20 && this->pending_[2] == 0x20 &&
               this->deferred_mode_ != MODE_OFF) {
@@ -387,8 +389,9 @@ class IltoPremium : public Component, public uart::UARTDevice {
       const size_t n = std::min<size_t>(this->recent_pos_, sizeof(this->recent_));
       for (size_t i = 0; i < n; i++)
         tail[i] = this->recent_[(this->recent_pos_ - n + i) % sizeof(this->recent_)];
+      HexBuf hex;
       ESP_LOGD(TAG, "bytes %u, frames ok %u, bad crc %u, last bytes: %s", (unsigned) this->bytes_,
-               (unsigned) this->frames_ok_, (unsigned) this->frames_bad_, format_hex_pretty(tail, n).c_str());
+               (unsigned) this->frames_ok_, (unsigned) this->frames_bad_, format_hex_pretty_to(hex, tail, n, '.'));
     }
   }
 
@@ -407,6 +410,10 @@ class IltoPremium : public Component, public uart::UARTDevice {
   static constexpr size_t HEADER_LEN = 7;       // ILTO layout: 64 a b c d e len
   static constexpr size_t CASA_HEADER_LEN = 5;  // CASA layout: 64 flags dst src len
   static constexpr uint8_t MAX_LEN = 30;        // swegongw's limit for the len byte
+  // Most bytes any log line shows: a whole outgoing frame (<len> CC, header, MAX_LEN, CRC).
+  static constexpr size_t LOG_HEX_BYTES = 2 + HEADER_LEN + MAX_LEN + 2;
+  // Stack buffer for format_hex_pretty_to() ("AA.BB.CC"); a longer input is cut, never overrun.
+  using HexBuf = char[format_hex_pretty_size(LOG_HEX_BYTES)];
   static constexpr size_t MAX_SEEN = 48;   // distinct header + type remembered for logging
   static constexpr uint32_t QUIET_MS = 30;         // bus idle this long before sending
   // CASA: send between 5 and 70 ms after the panel's empty answer (the next frame starts ~100 ms in).
@@ -501,7 +508,8 @@ class IltoPremium : public Component, public uart::UARTDevice {
       return;
     }
     if (this->layout_ != LAYOUT_UNKNOWN && !supported_(this->layout_, data)) {
-      ESP_LOGW(TAG, "%s is not known on the %s bus layout; not sent", format_hex_pretty(data).c_str(),
+      HexBuf hex;
+      ESP_LOGW(TAG, "%s is not known on the %s bus layout; not sent", format_hex_pretty_to(hex, data, '.'),
                layout_name_(this->layout_));
       return;
     }
@@ -582,7 +590,8 @@ class IltoPremium : public Component, public uart::UARTDevice {
     this->attempts_++;
     this->awaiting_ack_ = true;
     this->sent_at_ = millis();
-    ESP_LOGD(TAG, "Sent (try %u): %s", (unsigned) this->attempts_, format_hex_pretty(out).c_str());
+    HexBuf hex;
+    ESP_LOGD(TAG, "Sent (try %u): %s", (unsigned) this->attempts_, format_hex_pretty_to(hex, out, '.'));
   }
 
   static size_t header_len_(Layout layout) { return layout == LAYOUT_CASA ? CASA_HEADER_LEN : HEADER_LEN; }
@@ -646,7 +655,10 @@ class IltoPremium : public Component, public uart::UARTDevice {
     if (!possible) {
       if (this->crc_failed_) {
         this->frames_bad_++;
-        ESP_LOGV(TAG, "CRC mismatch: CC %s", format_hex_pretty(this->buf_, this->pos_ - 1).c_str());
+#if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_VERBOSE
+        HexBuf hex;
+        ESP_LOGV(TAG, "CRC mismatch: CC %s", format_hex_pretty_to(hex, this->buf_, this->pos_ - 1, '.'));
+#endif
       }
       this->restart_(b);
     }
@@ -680,7 +692,10 @@ class IltoPremium : public Component, public uart::UARTDevice {
     const uint8_t *p = this->buf_ + header + 3;
     const size_t n = this->buf_[header - 1] - 3;
 
-    ESP_LOGV(TAG, "frame: CC %s", format_hex_pretty(this->buf_, len).c_str());
+#if ESPHOME_LOG_LEVEL >= ESPHOME_LOG_LEVEL_VERBOSE
+    HexBuf hex;
+    ESP_LOGV(TAG, "frame: CC %s", format_hex_pretty_to(hex, this->buf_, len, '.'));
+#endif
     // The header bytes plus the type tell the frames apart (request vs answer, which value).
     uint64_t key = type;
     for (size_t i = 1; i < header - 1; i++)
@@ -689,8 +704,9 @@ class IltoPremium : public Component, public uart::UARTDevice {
     std::vector<uint8_t> body(this->buf_, this->buf_ + len - 2);
     auto it = this->seen_.find(key);
     if (it == this->seen_.end() || it->second != body) {
+      HexBuf hex;
       ESP_LOGD(TAG, "%s type %02X: CC %s (ok %u, bad crc %u)", it == this->seen_.end() ? "new" : "changed",
-               type, format_hex_pretty(this->buf_, len).c_str(), (unsigned) this->frames_ok_,
+               type, format_hex_pretty_to(hex, this->buf_, len, '.'), (unsigned) this->frames_ok_,
                (unsigned) this->frames_bad_);
       if (it != this->seen_.end())
         it->second = std::move(body);
@@ -706,7 +722,8 @@ class IltoPremium : public Component, public uart::UARTDevice {
     if (layout == LAYOUT_ILTO) {
       if (this->awaiting_ack_ && this->buf_[1] == 0x8A && n == 0 && type == this->pending_[0] &&
           this->buf_[9] == this->pending_[2]) {
-        ESP_LOGI(TAG, "Unit acknowledged %s", format_hex_pretty(this->pending_).c_str());
+        HexBuf hex;
+        ESP_LOGI(TAG, "Unit acknowledged %s", format_hex_pretty_to(hex, this->pending_, '.'));
         this->pending_.clear();
         this->awaiting_ack_ = false;
       }
@@ -744,7 +761,8 @@ class IltoPremium : public Component, public uart::UARTDevice {
       if (this->awaiting_ack_ && this->pending_.size() >= 3 && src == 0x0A && dst == 0x01 &&
           type == this->pending_[0] && select == this->pending_[2] &&
           (select == 0x81 ? n >= 2 && this->pending_.size() >= 4 && p[1] == this->pending_[3] : n >= 1)) {
-        ESP_LOGI(TAG, "Unit acknowledged %s", format_hex_pretty(this->pending_).c_str());
+        HexBuf hex;
+        ESP_LOGI(TAG, "Unit acknowledged %s", format_hex_pretty_to(hex, this->pending_, '.'));
         // Only the 3-step command (20 00 81 <step> ... <minutes>) sets the boost length; a clock
         // command's 4th byte is the weekday, so it must not be read as a step.
         if (this->pending_[0] == 0x20 && this->pending_[2] == 0x81 && this->pending_.size() >= 11)

@@ -152,10 +152,12 @@ for key in PROBLEMS:
         device_class=DEVICE_CLASS_PROBLEM
     )
 
-CONFIG_SCHEMA = (
+# format_hex_pretty_to() with a stack buffer (the log lines) first appeared in ESPHome 2026.1.0.
+CONFIG_SCHEMA = cv.All(
     cv.Schema(SCHEMA)
     .extend(cv.COMPONENT_SCHEMA)
-    .extend(uart.UART_DEVICE_SCHEMA)
+    .extend(uart.UART_DEVICE_SCHEMA),
+    cv.require_esphome_version(2026, 1, 0),
 )
 
 FINAL_VALIDATE_SCHEMA = uart.final_validate_device_schema(
